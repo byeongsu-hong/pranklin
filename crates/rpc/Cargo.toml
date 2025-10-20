@@ -1,0 +1,30 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name              = "pranklin-rpc"
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+axum.workspace             = true
+futures-util               = "0.3"
+governor.workspace         = true
+hex.workspace              = true
+prometheus.workspace       = true
+serde.workspace            = true
+serde_json.workspace       = true
+thiserror.workspace        = true
+tokio.workspace            = true
+tower.workspace            = true
+tower-http.workspace       = true
+tracing.workspace          = true
+
+pranklin-auth.workspace    = true
+pranklin-engine.workspace  = true
+pranklin-mempool.workspace = true
+pranklin-state.workspace   = true
+pranklin-tx.workspace      = true
+
+[dev-dependencies]
+tempfile.workspace = true

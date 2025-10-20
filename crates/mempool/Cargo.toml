@@ -1,0 +1,14 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name              = "pranklin-mempool"
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+thiserror.workspace        = true
+tokio.workspace            = true
+
+pranklin-auth.workspace = true
+pranklin-tx.workspace   = true

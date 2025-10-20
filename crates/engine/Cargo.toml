@@ -1,0 +1,30 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name              = "pranklin-engine"
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+serde.workspace            = true
+serde_json.workspace       = true
+thiserror.workspace        = true
+tokio.workspace            = true
+
+pranklin-state.workspace = true
+pranklin-tx.workspace    = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace  = true
+
+pranklin-auth.workspace = true
+
+[[bench]]
+harness = false
+name    = "orderbook_benchmark"
+
+[[bench]]
+harness = false
+name    = "engine_throughput_benchmark"

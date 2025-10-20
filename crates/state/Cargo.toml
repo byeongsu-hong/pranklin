@@ -1,0 +1,46 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name              = "pranklin-state"
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace     = true
+anyhow.workspace               = true
+aws-config.workspace           = true
+aws-sdk-s3.workspace           = true
+bincode.workspace              = true
+borsh.workspace                = true
+bytes.workspace                = true
+flate2.workspace               = true
+google-cloud-storage.workspace = true
+hex.workspace                  = true
+jmt.workspace                  = true
+log.workspace                  = true
+lz4.workspace                  = true
+num_cpus.workspace             = true
+rocksdb.workspace              = true
+serde.workspace                = true
+serde_json.workspace           = true
+sha2.workspace                 = true
+tar.workspace                  = true
+thiserror.workspace            = true
+tokio.workspace                = true
+zstd.workspace                 = true
+
+[dependencies.uuid]
+optional  = true
+workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace  = true
+
+[features]
+backup-engine = []
+testing       = ["uuid"]
+
+[[bench]]
+harness = false
+name    = "state_benchmark"

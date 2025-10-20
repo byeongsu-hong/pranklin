@@ -1,0 +1,68 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data
+/data/
+/logs/
+*.log
+*.db
+*.db-*
+
+# Backups
+/backup/
+*.tar.gz
+*.tar.lz4
+
+# Build artifacts
+/dist/
+/build/
+
+# Testing
+/coverage/
+
+# Process IDs
+*.pid
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Documentation build
+/docs/build/
+/site/
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+data/
+sequencer/bin/

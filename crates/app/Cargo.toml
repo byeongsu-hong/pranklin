@@ -1,0 +1,27 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name              = "pranklin-app"
+version.workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+alloy-primitives.workspace   = true
+anyhow.workspace             = true
+clap.workspace               = true
+http                         = "1.2"
+tokio.workspace              = true
+tonic.workspace              = true
+tower                        = "0.5"
+tracing.workspace            = true
+tracing-subscriber.workspace = true
+
+pranklin-exec.workspace  = true
+pranklin-rpc.workspace   = true
+pranklin-state.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
