@@ -146,28 +146,15 @@ impl RocksDbStorage {
     ) -> Result<Option<T>, StateError> {
         let key_hash = key.hash();
 
-        // First check pending updates (uncommitted)
         if let Some(bytes) = self.pending_updates.read().unwrap().get(&key_hash) {
-            let value: T = serde_json::from_slice(bytes).map_err(|e| {
-                StateError::DeserializationError(format!("Failed to deserialize: {}", e))
-            })?;
-            return Ok(Some(value));
+            return Ok(Some(serde_json::from_slice(bytes)?));
         }
 
-        // Not in pending, query from JMT (committed data)
-        match self.get_value_option(version, key_hash) {
-            Ok(Some(bytes)) => {
-                let value: T = serde_json::from_slice(&bytes).map_err(|e| {
-                    StateError::DeserializationError(format!("Failed to deserialize: {}", e))
-                })?;
-                Ok(Some(value))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(StateError::StorageError(format!(
-                "Failed to get from JMT: {}",
-                e
-            ))),
-        }
+        self.get_value_option(version, key_hash)
+            .map_err(|e| StateError::StorageError(format!("Failed to get from JMT: {}", e)))?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()
+            .map_err(Into::into)
     }
 
     /// Set a value (buffered in memory until commit)
@@ -175,50 +162,30 @@ impl RocksDbStorage {
     /// This adds the update to the pending buffer. The actual write to RocksDB
     /// happens in `commit()` when all pending updates are written through JMT.
     pub fn set<T: Serialize>(&self, key: StateKey, value: T) -> Result<(), StateError> {
-        // Serialize the value
-        let bytes = serde_json::to_vec(&value)
-            .map_err(|e| StateError::SerializationError(format!("Failed to serialize: {}", e)))?;
-
-        // Convert StateKey to KeyHash for JMT
-        let key_hash = key.hash();
-
-        // Add to pending updates buffer
+        let bytes = serde_json::to_vec(&value)?;
+        let key_hash = key.into();
         self.pending_updates
             .write()
             .unwrap()
             .insert(key_hash, bytes);
-
         Ok(())
     }
 
     /// Store latest version for a key (optimization for O(1) lookup)
     fn store_latest_version(&self, key_hash: &KeyHash, version: u64) -> Result<(), StateError> {
         let key = format!("latest_version_{}", hex::encode(key_hash.0));
-        let version_bytes = version.to_le_bytes();
-        self.db.put(key.as_bytes(), version_bytes).map_err(|e| {
-            StateError::StorageError(format!("Failed to store latest version: {}", e))
-        })?;
-        Ok(())
+        self.db
+            .put(key.as_bytes(), version.to_le_bytes())
+            .map_err(|e| StateError::StorageError(format!("Failed to store latest version: {}", e)))
     }
 
     /// Get latest version for a key (optimization for O(1) lookup)
     fn get_latest_version(&self, key_hash: &KeyHash) -> Result<Option<u64>, StateError> {
         let key = format!("latest_version_{}", hex::encode(key_hash.0));
-        match self.db.get(key.as_bytes()) {
-            Ok(Some(bytes)) => {
-                if bytes.len() == 8 {
-                    let version = u64::from_le_bytes(bytes.try_into().unwrap());
-                    Ok(Some(version))
-                } else {
-                    Ok(None)
-                }
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(StateError::StorageError(format!(
-                "Failed to get latest version: {}",
-                e
-            ))),
-        }
+        self.db
+            .get(key.as_bytes())
+            .map_err(|e| StateError::StorageError(format!("Failed to get latest version: {}", e)))
+            .map(|opt| opt.and_then(|bytes| bytes.try_into().ok().map(u64::from_le_bytes)))
     }
 
     /// Delete a key (buffered in memory until commit)
@@ -226,17 +193,7 @@ impl RocksDbStorage {
     /// In JMT, deletions are represented as `None` values.
     /// The actual deletion happens in `commit()` when written through JMT.
     pub fn delete(&self, key: StateKey) -> Result<(), StateError> {
-        // Convert StateKey to KeyHash
-        let key_hash = key.hash();
-
-        // Remove from pending updates (if it was added but not committed)
-        // This effectively deletes it before it's written
-        self.pending_updates.write().unwrap().remove(&key_hash);
-
-        // TODO: For keys that are already committed, we need to add them
-        // with None value to pending updates. For now, we just remove from buffer.
-        // Full deletion support requires tracking which keys to delete.
-
+        self.pending_updates.write().unwrap().remove(&key.into());
         Ok(())
     }
 
@@ -299,27 +256,22 @@ impl RocksDbStorage {
             }
         }
 
-        // Calculate and cache state root
         let root = self.calculate_state_root(version)?;
         self.root_cache.write().unwrap().insert(version, root);
 
-        // Update current version in memory and persist to disk
         *self.current_version.write().unwrap() = version;
         self.db
             .put(b"__current_version__", version.to_le_bytes())
             .map_err(|e| StateError::StorageError(format!("Failed to persist version: {}", e)))?;
 
-        // Create snapshot if needed
-        if self.pruning_config.enabled
-            && version.is_multiple_of(self.pruning_config.snapshot_interval)
-        {
-            self.create_snapshot(version)?;
-        }
+        if self.pruning_config.enabled {
+            if version.is_multiple_of(self.pruning_config.snapshot_interval) {
+                self.create_snapshot(version)?;
+            }
 
-        // Prune old data if needed
-        if self.pruning_config.enabled && version > self.pruning_config.prune_before {
-            let prune_before_version = version - self.pruning_config.prune_before;
-            self.prune_before_version(prune_before_version)?;
+            if version > self.pruning_config.prune_before {
+                self.prune_before_version(version - self.pruning_config.prune_before)?;
+            }
         }
 
         Ok(root)
@@ -337,7 +289,6 @@ impl RocksDbStorage {
 
     /// Create a snapshot at the current version
     fn create_snapshot(&self, version: u64) -> Result<(), StateError> {
-        // Mark this version as a snapshot
         let snapshot_key = format!("snapshot_{}", version);
         let root = self.get_root(version);
 
@@ -359,9 +310,8 @@ impl RocksDbStorage {
     /// 2. Prune all non-snapshot versions before prune_before
     /// 3. Use batch deletion for efficiency
     fn prune_before_version(&self, prune_before: u64) -> Result<(), StateError> {
-        // Calculate which versions are snapshot versions and should be kept
         let snapshots_to_keep: std::collections::HashSet<u64> = (0..=prune_before)
-            .filter(|v| v % self.pruning_config.snapshot_interval == 0)
+            .filter(|v| v.is_multiple_of(self.pruning_config.snapshot_interval))
             .collect();
 
         log::info!(
@@ -370,58 +320,8 @@ impl RocksDbStorage {
             snapshots_to_keep.len()
         );
 
-        // Collect keys to delete
-        let mut keys_to_delete = Vec::new();
-        let mut pruned_count = 0;
-
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
-        for item in iter {
-            match item {
-                Ok((key, _)) => {
-                    // Skip snapshot metadata keys
-                    if key.starts_with(b"snapshot_") {
-                        continue;
-                    }
-
-                    // Check if this key has a version suffix
-                    if key.len() >= 8 {
-                        let key_version = u64::from_le_bytes([
-                            key[key.len() - 8],
-                            key[key.len() - 7],
-                            key[key.len() - 6],
-                            key[key.len() - 5],
-                            key[key.len() - 4],
-                            key[key.len() - 3],
-                            key[key.len() - 2],
-                            key[key.len() - 1],
-                        ]);
-
-                        // Prune if:
-                        // 1. Version is before prune_before
-                        // 2. Version is NOT a snapshot version
-                        if key_version < prune_before && !snapshots_to_keep.contains(&key_version) {
-                            keys_to_delete.push(key.to_vec());
-                            pruned_count += 1;
-
-                            // Batch delete every 10000 keys to avoid memory issues
-                            if keys_to_delete.len() >= 10000 {
-                                self.batch_delete(&keys_to_delete)?;
-                                keys_to_delete.clear();
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Error iterating during pruning: {}", e);
-                    continue;
-                }
-            }
-        }
-
-        // Delete remaining keys
-        if !keys_to_delete.is_empty() {
-            self.batch_delete(&keys_to_delete)?;
-        }
+        let pruned_count =
+            self.collect_and_delete_old_versions(prune_before, &snapshots_to_keep)?;
 
         log::info!(
             "Pruning completed: removed {} keys before version {}",
@@ -429,9 +329,6 @@ impl RocksDbStorage {
             prune_before
         );
 
-        // Trigger compaction to reclaim disk space
-        // This is important - deletion marks keys as deleted but doesn't immediately
-        // reclaim disk space. Compaction is needed to actually free up space.
         if pruned_count > 0 {
             log::info!("Triggering compaction to reclaim disk space...");
             self.db.compact_range::<&[u8], &[u8]>(None, None);
@@ -441,19 +338,56 @@ impl RocksDbStorage {
         Ok(())
     }
 
+    /// Collect and delete old versions in batches
+    fn collect_and_delete_old_versions(
+        &self,
+        prune_before: u64,
+        snapshots_to_keep: &std::collections::HashSet<u64>,
+    ) -> Result<usize, StateError> {
+        let mut keys_to_delete = Vec::with_capacity(10000);
+        let mut pruned_count = 0;
+
+        for item in self.db.iterator(rocksdb::IteratorMode::Start).flatten() {
+            let (key, _) = item;
+
+            if key.starts_with(b"snapshot_") || key.len() < 8 {
+                continue;
+            }
+
+            let key_version = self.extract_version_from_key(&key);
+
+            if key_version < prune_before && !snapshots_to_keep.contains(&key_version) {
+                keys_to_delete.push(key.to_vec());
+                pruned_count += 1;
+
+                if keys_to_delete.len() >= 10000 {
+                    self.batch_delete(&keys_to_delete)?;
+                    keys_to_delete.clear();
+                }
+            }
+        }
+
+        if !keys_to_delete.is_empty() {
+            self.batch_delete(&keys_to_delete)?;
+        }
+
+        Ok(pruned_count)
+    }
+
+    /// Extract version from key suffix
+    fn extract_version_from_key(&self, key: &[u8]) -> u64 {
+        let version_bytes: [u8; 8] = key[key.len() - 8..].try_into().unwrap();
+        u64::from_le_bytes(version_bytes)
+    }
+
     /// Batch delete keys efficiently
     fn batch_delete(&self, keys: &[Vec<u8>]) -> Result<(), StateError> {
         let mut batch = rocksdb::WriteBatch::default();
-
-        for key in keys {
-            batch.delete(key);
-        }
+        keys.iter().for_each(|key| batch.delete(key));
 
         self.db
             .write(batch)
-            .map_err(|e| StateError::StorageError(format!("Failed to batch delete keys: {}", e)))?;
-
-        Ok(())
+            .map_err(|e| StateError::StorageError(format!("Failed to batch delete keys: {}", e)))
     }
 
     /// Calculate state root using Jellyfish Merkle Tree (JMT)
@@ -466,21 +400,11 @@ impl RocksDbStorage {
     ///
     /// The JMT reads from storage via the TreeReader trait (implemented below).
     fn calculate_state_root(&self, version: u64) -> Result<B256, StateError> {
-        // Create JMT instance with self as the storage backend
-        // The TreeReader trait implementation below provides read access to JMT nodes
-        // Using sha2::Sha256 as the hasher (implements SimpleHasher trait)
         let tree = JellyfishMerkleTree::<_, sha2::Sha256>::new(self);
 
-        // Get the root hash at this version
-        // JMT will call get_node_option(), get_rightmost_leaf(), etc. via TreeReader
-        match tree.get_root_hash(version) {
-            Ok(root_hash) => {
-                // Convert JMT RootHash ([u8; 32]) to B256
-                Ok(B256::from_slice(&root_hash.0))
-            }
-            Err(e) => {
-                // If root node not found (e.g., empty tree at version 0), return ZERO hash
-                // This is expected for empty state before any commits
+        tree.get_root_hash(version)
+            .map(|root_hash| B256::from_slice(&root_hash.0))
+            .or_else(|e| {
                 if e.to_string().contains("Root node not found") {
                     Ok(B256::ZERO)
                 } else {
@@ -489,34 +413,23 @@ impl RocksDbStorage {
                         e
                     )))
                 }
-            }
-        }
+            })
     }
 
     /// Get list of available snapshots
     pub fn list_snapshots(&self) -> Result<Vec<u64>, StateError> {
-        let mut snapshots = Vec::new();
-        let prefix = b"snapshot_";
-
-        let iter = self.db.prefix_iterator(prefix);
-        for item in iter {
-            match item {
-                Ok((key, _)) => {
-                    if let Ok(key_str) = std::str::from_utf8(&key)
-                        && let Some(version_str) = key_str.strip_prefix("snapshot_")
-                        && let Ok(version) = version_str.parse::<u64>()
-                    {
-                        snapshots.push(version);
-                    }
-                }
-                Err(e) => {
-                    return Err(StateError::StorageError(format!(
-                        "Failed to iterate snapshots: {}",
-                        e
-                    )));
-                }
-            }
-        }
+        let mut snapshots: Vec<u64> = self
+            .db
+            .prefix_iterator(b"snapshot_")
+            .filter_map(|item| {
+                item.ok().and_then(|(key, _)| {
+                    std::str::from_utf8(&key)
+                        .ok()
+                        .and_then(|s| s.strip_prefix("snapshot_"))
+                        .and_then(|v| v.parse::<u64>().ok())
+                })
+            })
+            .collect();
 
         snapshots.sort_unstable();
         Ok(snapshots)
@@ -526,29 +439,26 @@ impl RocksDbStorage {
     pub fn restore_from_snapshot(&self, snapshot_version: u64) -> Result<(), StateError> {
         let snapshot_key = format!("snapshot_{}", snapshot_version);
 
-        match self.db.get(snapshot_key.as_bytes()) {
-            Ok(Some(_root_bytes)) => {
-                *self.current_version.write().unwrap() = snapshot_version;
-                self.db
-                    .put(b"__current_version__", snapshot_version.to_le_bytes())
-                    .map_err(|e| {
-                        StateError::StorageError(format!("Failed to persist version: {}", e))
-                    })?;
-                log::info!(
-                    "Restored state from snapshot at version {}",
+        self.db
+            .get(snapshot_key.as_bytes())
+            .map_err(|e| StateError::StorageError(format!("Failed to restore snapshot: {}", e)))?
+            .ok_or_else(|| {
+                StateError::StorageError(format!(
+                    "Snapshot not found at version {}",
                     snapshot_version
-                );
-                Ok(())
-            }
-            Ok(None) => Err(StateError::StorageError(format!(
-                "Snapshot not found at version {}",
-                snapshot_version
-            ))),
-            Err(e) => Err(StateError::StorageError(format!(
-                "Failed to restore snapshot: {}",
-                e
-            ))),
-        }
+                ))
+            })?;
+
+        *self.current_version.write().unwrap() = snapshot_version;
+        self.db
+            .put(b"__current_version__", snapshot_version.to_le_bytes())
+            .map_err(|e| StateError::StorageError(format!("Failed to persist version: {}", e)))?;
+
+        log::info!(
+            "Restored state from snapshot at version {}",
+            snapshot_version
+        );
+        Ok(())
     }
 
     /// Get the current version from storage
@@ -558,16 +468,12 @@ impl RocksDbStorage {
 
     /// Get current database size estimate
     pub fn get_db_size(&self) -> Result<u64, StateError> {
-        // RocksDB doesn't provide exact size easily, but we can get an estimate
-        let mut total_size = 0u64;
-
-        // This is approximate - in production, you'd use RocksDB properties
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
-        for (_key, value) in iter.flatten() {
-            total_size += value.len() as u64;
-        }
-
-        Ok(total_size)
+        Ok(self
+            .db
+            .iterator(rocksdb::IteratorMode::Start)
+            .flatten()
+            .map(|(_, value)| value.len() as u64)
+            .sum())
     }
 
     /// Create a checkpoint (RocksDB native snapshot) at the specified path

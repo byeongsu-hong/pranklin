@@ -147,52 +147,46 @@ async fn handle_socket(socket: WebSocket, _state: RpcState) {
     }
 }
 
-/// Helper function to broadcast orderbook updates
-pub async fn broadcast_orderbook_update(
-    broadcaster: &WsBroadcaster,
-    market_id: u32,
-    bids: Vec<(u64, u64)>,
-    asks: Vec<(u64, u64)>,
-) {
-    broadcaster.broadcast(WsMessage::OrderBookUpdate {
-        market_id,
-        bids,
-        asks,
-    });
-}
+/// Helper functions for broadcasting messages
+impl WsBroadcaster {
+    pub fn broadcast_orderbook_update(
+        &self,
+        market_id: u32,
+        bids: Vec<(u64, u64)>,
+        asks: Vec<(u64, u64)>,
+    ) {
+        self.broadcast(WsMessage::OrderBookUpdate {
+            market_id,
+            bids,
+            asks,
+        });
+    }
 
-/// Helper function to broadcast trade updates
-pub async fn broadcast_trade_update(
-    broadcaster: &WsBroadcaster,
-    market_id: u32,
-    price: u64,
-    size: u64,
-    is_buy: bool,
-    timestamp: u64,
-) {
-    broadcaster.broadcast(WsMessage::TradeUpdate {
-        market_id,
-        price,
-        size,
-        is_buy,
-        timestamp,
-    });
-}
+    pub fn broadcast_trade_update(
+        &self,
+        market_id: u32,
+        price: u64,
+        size: u64,
+        is_buy: bool,
+        timestamp: u64,
+    ) {
+        self.broadcast(WsMessage::TradeUpdate {
+            market_id,
+            price,
+            size,
+            is_buy,
+            timestamp,
+        });
+    }
 
-/// Helper function to broadcast liquidation events
-pub async fn broadcast_liquidation(
-    broadcaster: &WsBroadcaster,
-    market_id: u32,
-    trader: String,
-    size: u64,
-    price: u64,
-) {
-    broadcaster.broadcast(WsMessage::LiquidationEvent {
-        market_id,
-        trader,
-        size,
-        price,
-    });
+    pub fn broadcast_liquidation(&self, market_id: u32, trader: String, size: u64, price: u64) {
+        self.broadcast(WsMessage::LiquidationEvent {
+            market_id,
+            trader,
+            size,
+            price,
+        });
+    }
 }
 
 // Re-export futures trait for split

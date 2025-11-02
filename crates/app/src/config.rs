@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -11,149 +12,119 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Start the Pranklin daemon
-    Start {
-        /// gRPC server address
-        #[arg(long = "grpc.addr", default_value = "0.0.0.0:50051")]
-        grpc_addr: String,
-
-        /// RPC server address
-        #[arg(long = "rpc.addr", default_value = "0.0.0.0:3000")]
-        rpc_addr: String,
-
-        /// Database path
-        #[arg(long = "db.path", default_value = "./data/pranklin_db")]
-        db_path: String,
-
-        /// Chain ID
-        #[arg(long = "chain.id", default_value = "pranklin-mainnet-1")]
-        chain_id: String,
-
-        /// Enable debug logging
-        #[arg(long = "log.debug")]
-        debug: bool,
-
-        /// Bridge operator addresses (comma-separated)
-        #[arg(long = "bridge.operators", value_delimiter = ',')]
-        bridge_operators: Vec<String>,
-
-        /// Enable snapshot auto-export
-        #[arg(long = "snapshot.enable")]
-        snapshot_enable: bool,
-
-        /// Snapshot export interval in blocks
-        #[arg(long = "snapshot.interval", default_value = "10000")]
-        snapshot_interval: u64,
-
-        #[command(flatten)]
-        snapshot: Box<SnapshotConfig>,
-    },
-
+    Start(Box<StartConfig>),
     /// Display version information
     Version,
 }
 
-/// Snapshot storage configuration
 #[derive(Args)]
-#[group(multiple = false)]
-pub struct SnapshotConfig {
-    #[command(flatten)]
-    pub s3: Option<S3Config>,
+pub struct StartConfig {
+    /// gRPC server address
+    #[arg(long = "grpc.addr", default_value = "0.0.0.0:50051")]
+    pub grpc_addr: String,
+
+    /// RPC server address
+    #[arg(long = "rpc.addr", default_value = "0.0.0.0:3000")]
+    pub rpc_addr: String,
+
+    /// Database path
+    #[arg(long = "db.path", default_value = "./data/pranklin_db")]
+    pub db_path: String,
+
+    /// Chain ID
+    #[arg(long = "chain.id", default_value = "pranklin-mainnet-1")]
+    pub chain_id: String,
+
+    /// Enable debug logging
+    #[arg(long = "log.debug")]
+    pub debug: bool,
+
+    /// Bridge operator addresses (comma-separated)
+    #[arg(long = "bridge.operators", value_delimiter = ',')]
+    pub bridge_operators: Vec<String>,
+
+    /// Enable snapshot auto-export
+    #[arg(long = "snapshot.enable")]
+    pub snapshot_enable: bool,
+
+    /// Snapshot export interval in blocks
+    #[arg(long = "snapshot.interval", default_value = "10000")]
+    pub snapshot_interval: u64,
 
     #[command(flatten)]
-    pub gcs: Option<GcsConfig>,
-
-    #[command(flatten)]
-    pub local: Option<LocalConfig>,
+    pub snapshot: SnapshotConfig,
 }
 
-/// AWS S3 snapshot configuration
+/// Snapshot storage configuration
 #[derive(Args)]
-pub struct S3Config {
+pub struct SnapshotConfig {
     /// S3 bucket name
-    #[arg(long = "snapshot.s3.bucket", required = false)]
+    #[arg(long = "snapshot.s3.bucket")]
     pub s3_bucket: Option<String>,
 
     /// S3 region
-    #[arg(
-        long = "snapshot.s3.region",
-        default_value = "us-east-1",
-        required = false
-    )]
-    pub region: String,
+    #[arg(long = "snapshot.s3.region", default_value = "us-east-1")]
+    pub s3_region: String,
 
     /// S3 prefix/path in bucket
-    #[arg(
-        long = "snapshot.s3.prefix",
-        default_value = "snapshots",
-        required = false
-    )]
+    #[arg(long = "snapshot.s3.prefix", default_value = "snapshots")]
     pub s3_prefix: String,
-}
 
-/// Google Cloud Storage snapshot configuration
-#[derive(Args)]
-pub struct GcsConfig {
     /// GCS bucket name
-    #[arg(long = "snapshot.gcs.bucket", required = false)]
+    #[arg(long = "snapshot.gcs.bucket")]
     pub gcs_bucket: Option<String>,
 
     /// GCS prefix/path in bucket
-    #[arg(
-        long = "snapshot.gcs.prefix",
-        default_value = "snapshots",
-        required = false
-    )]
+    #[arg(long = "snapshot.gcs.prefix", default_value = "snapshots")]
     pub gcs_prefix: String,
-}
 
-/// Local filesystem snapshot configuration
-#[derive(Args)]
-pub struct LocalConfig {
     /// Local snapshot directory path
-    #[arg(
-        long = "snapshot.local.path",
-        default_value = "./snapshots",
-        required = false
-    )]
-    pub path: String,
+    #[arg(long = "snapshot.local.path", default_value = "./snapshots")]
+    pub local_path: String,
 }
 
-impl SnapshotConfig {
-    /// Determine storage provider from configuration
-    pub fn to_provider(&self) -> anyhow::Result<pranklin_state::CloudProvider> {
-        use pranklin_state::{
-            CloudProvider, GCSConfig as StateGCSConfig, S3Config as StateS3Config,
-        };
+impl StartConfig {
+    pub fn snapshot_exporter_config(&self) -> Option<pranklin_state::SnapshotExporterConfig> {
+        self.snapshot_enable
+            .then(|| pranklin_state::SnapshotExporterConfig {
+                provider: (&self.snapshot).into(),
+                auto_export_interval: self.snapshot_interval,
+                chain_id: self.chain_id.clone(),
+            })
+    }
+
+    pub fn parse_bridge_operators(&self) -> anyhow::Result<Vec<Address>> {
+        self.bridge_operators
+            .iter()
+            .map(|s| s.parse())
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn has_bridge_operators(&self) -> bool {
+        !self.bridge_operators.is_empty()
+    }
+}
+
+impl From<&SnapshotConfig> for pranklin_state::CloudProvider {
+    fn from(config: &SnapshotConfig) -> Self {
+        use pranklin_state::{CloudProvider, GCSConfig, S3Config};
 
         // Priority: S3 > GCS > Local
-        if let Some(ref s3) = self.s3
-            && let Some(ref bucket) = s3.s3_bucket
-        {
-            return Ok(CloudProvider::S3(StateS3Config::new(
-                bucket.clone(),
-                &s3.region,
-                &s3.s3_prefix,
-            )));
-        }
-
-        if let Some(ref gcs) = self.gcs
-            && let Some(ref bucket) = gcs.gcs_bucket
-        {
-            return Ok(CloudProvider::GCS(StateGCSConfig::new(
-                bucket.clone(),
-                &gcs.gcs_prefix,
-            )));
-        }
-
-        // Default to local
-        let path = self
-            .local
+        config
+            .s3_bucket
             .as_ref()
-            .map(|l| l.path.clone())
-            .unwrap_or_else(|| "./snapshots".to_string());
-
-        Ok(CloudProvider::Local {
-            path: std::path::PathBuf::from(path),
-        })
+            .map(|bucket| {
+                CloudProvider::S3(S3Config::new(bucket, &config.s3_region, &config.s3_prefix))
+            })
+            .or_else(|| {
+                config
+                    .gcs_bucket
+                    .as_ref()
+                    .map(|bucket| CloudProvider::GCS(GCSConfig::new(bucket, &config.gcs_prefix)))
+            })
+            .unwrap_or_else(|| CloudProvider::Local {
+                path: config.local_path.as_str().into(),
+            })
     }
 }

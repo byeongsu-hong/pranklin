@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::fmt;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "pranklin-loadtest")]
@@ -67,40 +68,61 @@ pub struct LoadTestConfig {
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum TestScenario {
-    /// Standard load test (original behavior)
     Standard,
-    /// Order spam: submit & cancel rapidly
     OrderSpam,
-    /// Order matching: create matching buy/sell orders
     OrderMatching,
-    /// Aggressive: build orderbook then spam market orders
     Aggressive,
+}
+
+impl fmt::Display for TestScenario {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Standard => write!(f, "Standard load test"),
+            Self::OrderSpam => write!(f, "Order spam: submit & cancel rapidly"),
+            Self::OrderMatching => write!(f, "Order matching: matching buy/sell orders"),
+            Self::Aggressive => write!(f, "Aggressive: orderbook depth + market orders"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum LoadTestMode {
-    /// Sustained constant load
     Sustained,
-    /// Gradually increasing load
     Ramp,
-    /// Periodic bursts of high load
     Burst,
-    /// Maximum throughput test
     Stress,
+}
+
+impl fmt::Display for LoadTestMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sustained => write!(f, "Sustained"),
+            Self::Ramp => write!(f, "Ramp"),
+            Self::Burst => write!(f, "Burst"),
+            Self::Stress => write!(f, "Stress"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum TransactionType {
-    /// Place order transactions only
     PlaceOrder,
-    /// Cancel order transactions only
     CancelOrder,
-    /// Deposit transactions only
     Deposit,
-    /// Withdraw transactions only
     Withdraw,
-    /// Transfer transactions only
     Transfer,
-    /// Mixed transaction types
     Mixed,
+}
+
+impl fmt::Display for TransactionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PlaceOrder => write!(f, "PlaceOrder"),
+            Self::CancelOrder => write!(f, "CancelOrder"),
+            Self::Deposit => write!(f, "Deposit"),
+            Self::Withdraw => write!(f, "Withdraw"),
+            Self::Transfer => write!(f, "Transfer"),
+            Self::Mixed => write!(f, "Mixed"),
+        }
+    }
 }

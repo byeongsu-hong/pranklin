@@ -79,7 +79,7 @@ fn test_maximum_order_size_validation() {
     );
 
     if let TxPayload::PlaceOrder(ref order) = tx.payload {
-        let result = engine.process_place_order(&tx, order);
+        let result = engine.process_place_order(tx.from, order);
         assert!(
             result.is_err(),
             "Order exceeding max size should be rejected"
@@ -127,7 +127,7 @@ fn test_minimum_order_size_validation() {
     );
 
     if let TxPayload::PlaceOrder(ref order) = tx.payload {
-        let result = engine.process_place_order(&tx, order);
+        let result = engine.process_place_order(tx.from, order);
         assert!(result.is_err(), "Order below min size should be rejected");
         assert!(
             result.unwrap_err().to_string().contains("below minimum"),
@@ -204,7 +204,7 @@ fn test_nonce_handling_after_failed_transaction() {
 
     // Simulate successful execution
     if let TxPayload::Deposit(ref deposit) = tx1.payload {
-        engine.process_deposit(&tx1, deposit).unwrap();
+        engine.process_deposit(tx1.from, deposit).unwrap();
     }
     engine.state_mut().increment_nonce(trader).unwrap();
 
@@ -226,7 +226,7 @@ fn test_nonce_handling_after_failed_transaction() {
 
     // This should fail, but nonce wasn't incremented yet (correct!)
     if let TxPayload::Withdraw(ref withdraw) = tx2.payload {
-        let result = engine.process_withdraw(&tx2, withdraw);
+        let result = engine.process_withdraw(tx2.from, withdraw);
         assert!(result.is_err(), "Should fail due to insufficient balance");
     }
 
@@ -245,7 +245,7 @@ fn test_nonce_handling_after_failed_transaction() {
     );
 
     if let TxPayload::Deposit(ref deposit) = tx3.payload {
-        engine.process_deposit(&tx3, deposit).unwrap();
+        engine.process_deposit(tx3.from, deposit).unwrap();
     }
     engine.state_mut().increment_nonce(trader).unwrap();
 

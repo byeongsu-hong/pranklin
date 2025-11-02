@@ -1,6 +1,18 @@
 use alloy_primitives::{Address, B256};
 use serde::{Deserialize, Serialize};
 
+/// Generic success response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuccessResponse {
+    pub success: bool,
+}
+
+impl SuccessResponse {
+    pub fn ok() -> Self {
+        Self { success: true }
+    }
+}
+
 /// Submit transaction request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitTxRequest {
@@ -13,6 +25,12 @@ pub struct SubmitTxRequest {
 pub struct SubmitTxResponse {
     /// Transaction hash
     pub tx_hash: B256,
+}
+
+impl From<B256> for SubmitTxResponse {
+    fn from(tx_hash: B256) -> Self {
+        Self { tx_hash }
+    }
 }
 
 /// Get transaction status request
@@ -35,6 +53,44 @@ pub struct TxStatus {
     pub error: Option<String>,
 }
 
+impl TxStatus {
+    pub fn pending(tx_hash: B256) -> Self {
+        Self {
+            tx_hash,
+            status: "pending".to_string(),
+            block_height: None,
+            error: None,
+        }
+    }
+
+    pub fn not_found(tx_hash: B256) -> Self {
+        Self {
+            tx_hash,
+            status: "not_found".to_string(),
+            block_height: None,
+            error: Some("Transaction not found".to_string()),
+        }
+    }
+
+    pub fn confirmed(tx_hash: B256, block_height: u64) -> Self {
+        Self {
+            tx_hash,
+            status: "confirmed".to_string(),
+            block_height: Some(block_height),
+            error: None,
+        }
+    }
+
+    pub fn failed(tx_hash: B256, error: String) -> Self {
+        Self {
+            tx_hash,
+            status: "failed".to_string(),
+            block_height: None,
+            error: Some(error),
+        }
+    }
+}
+
 /// Get balance request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetBalanceRequest {
@@ -51,6 +107,12 @@ pub struct GetBalanceResponse {
     pub balance: u128,
 }
 
+impl From<u128> for GetBalanceResponse {
+    fn from(balance: u128) -> Self {
+        Self { balance }
+    }
+}
+
 /// Get nonce request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetNonceRequest {
@@ -63,6 +125,12 @@ pub struct GetNonceRequest {
 pub struct GetNonceResponse {
     /// Current nonce
     pub nonce: u64,
+}
+
+impl From<u64> for GetNonceResponse {
+    fn from(nonce: u64) -> Self {
+        Self { nonce }
+    }
 }
 
 /// Get position request
@@ -91,6 +159,20 @@ pub struct PositionInfo {
     pub unrealized_pnl: u128,
     /// Is profit
     pub is_profit: bool,
+}
+
+impl PositionInfo {
+    pub fn from_position(position: pranklin_state::Position, market_id: u32) -> Self {
+        Self {
+            market_id,
+            size: position.size,
+            entry_price: position.entry_price,
+            is_long: position.is_long,
+            margin: position.margin,
+            unrealized_pnl: 0,
+            is_profit: true,
+        }
+    }
 }
 
 /// Get positions response
@@ -126,6 +208,21 @@ pub struct OrderInfo {
     pub remaining_size: u64,
     /// Created at (block height)
     pub created_at: u64,
+}
+
+impl From<pranklin_state::Order> for OrderInfo {
+    fn from(order: pranklin_state::Order) -> Self {
+        Self {
+            id: order.id,
+            market_id: order.market_id,
+            owner: order.owner,
+            is_buy: order.is_buy,
+            price: order.price,
+            original_size: order.original_size,
+            remaining_size: order.remaining_size,
+            created_at: order.created_at,
+        }
+    }
 }
 
 /// List orders request
@@ -172,6 +269,21 @@ pub struct MarketInfo {
     pub max_leverage: u32,
 }
 
+impl From<pranklin_state::Market> for MarketInfo {
+    fn from(market: pranklin_state::Market) -> Self {
+        Self {
+            id: market.id,
+            symbol: market.symbol,
+            base_asset_id: market.base_asset_id,
+            quote_asset_id: market.quote_asset_id,
+            price_decimals: market.price_decimals,
+            size_decimals: market.size_decimals,
+            min_order_size: market.min_order_size,
+            max_leverage: market.max_leverage,
+        }
+    }
+}
+
 /// Get funding rate request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetFundingRateRequest {
@@ -194,6 +306,18 @@ pub struct FundingRateInfo {
     pub oracle_price: u64,
 }
 
+impl From<pranklin_state::FundingRate> for FundingRateInfo {
+    fn from(funding: pranklin_state::FundingRate) -> Self {
+        Self {
+            rate: funding.rate,
+            last_update: funding.last_update,
+            index: funding.index,
+            mark_price: funding.mark_price,
+            oracle_price: funding.oracle_price,
+        }
+    }
+}
+
 /// Set agent request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetAgentRequest {
@@ -201,25 +325,11 @@ pub struct SetAgentRequest {
     pub tx: String, // hex-encoded
 }
 
-/// Set agent response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetAgentResponse {
-    /// Success
-    pub success: bool,
-}
-
 /// Remove agent request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveAgentRequest {
     /// Signed transaction
     pub tx: String, // hex-encoded
-}
-
-/// Remove agent response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoveAgentResponse {
-    /// Success
-    pub success: bool,
 }
 
 /// List agents request
@@ -269,6 +379,19 @@ pub struct AssetInfo {
     pub collateral_weight_bps: u32,
 }
 
+impl From<pranklin_state::Asset> for AssetInfo {
+    fn from(asset: pranklin_state::Asset) -> Self {
+        Self {
+            id: asset.id,
+            symbol: asset.symbol,
+            name: asset.name,
+            decimals: asset.decimals,
+            is_collateral: asset.is_collateral,
+            collateral_weight_bps: asset.collateral_weight_bps,
+        }
+    }
+}
+
 /// List assets response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListAssetsResponse {
@@ -285,13 +408,6 @@ pub struct SetBridgeOperatorRequest {
     pub is_operator: bool,
 }
 
-/// Set bridge operator response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetBridgeOperatorResponse {
-    /// Success
-    pub success: bool,
-}
-
 /// Check bridge operator request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckBridgeOperatorRequest {
@@ -304,4 +420,10 @@ pub struct CheckBridgeOperatorRequest {
 pub struct CheckBridgeOperatorResponse {
     /// Whether the address is a bridge operator
     pub is_operator: bool,
+}
+
+impl From<bool> for CheckBridgeOperatorResponse {
+    fn from(is_operator: bool) -> Self {
+        Self { is_operator }
+    }
 }

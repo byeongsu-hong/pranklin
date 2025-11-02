@@ -1,14 +1,19 @@
+mod access;
 mod error;
+mod index_manager;
 mod rocksdb_storage;
 mod snapshot_exporter;
 mod types;
 
+pub use access::*;
 pub use error::*;
+pub use index_manager::*;
 pub use rocksdb_storage::*;
 pub use snapshot_exporter::*;
 pub use types::*;
 
 use alloy_primitives::Address;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 
 /// State manager using Jellyfish Merkle Tree with RocksDB backend
@@ -98,10 +103,7 @@ impl StateManager {
 
     /// Get account balance
     pub fn get_balance(&self, address: Address, asset_id: u32) -> Result<u128, StateError> {
-        let key = StateKey::Balance { address, asset_id };
-        self.storage
-            .get(&key, self.version)
-            .map(|v| v.unwrap_or_default())
+        self.get_or_default(StateKey::Balance { address, asset_id })
     }
 
     /// Set account balance
@@ -111,20 +113,28 @@ impl StateManager {
         asset_id: u32,
         amount: u128,
     ) -> Result<(), StateError> {
-        let key = StateKey::Balance { address, asset_id };
-        self.storage.set(key, amount)
+        self.storage
+            .set(StateKey::Balance { address, asset_id }, amount)
     }
 
     /// Get account nonce
     pub fn get_nonce(&self, address: Address) -> Result<u64, StateError> {
-        let key = StateKey::Nonce { address };
-        self.storage.get(&key, self.version).map(|v| v.unwrap_or(0))
+        self.get_or_default(StateKey::Nonce { address })
     }
 
     /// Set account nonce
     pub fn set_nonce(&mut self, address: Address, nonce: u64) -> Result<(), StateError> {
-        let key = StateKey::Nonce { address };
-        self.storage.set(key, nonce)
+        self.storage.set(StateKey::Nonce { address }, nonce)
+    }
+
+    /// Generic getter with default value
+    fn get_or_default<T: DeserializeOwned + Default>(
+        &self,
+        key: StateKey,
+    ) -> Result<T, StateError> {
+        self.storage
+            .get(&key, self.version)
+            .map(|v| v.unwrap_or_default())
     }
 
     /// Increment account nonce
@@ -141,8 +151,8 @@ impl StateManager {
         address: Address,
         market_id: u32,
     ) -> Result<Option<Position>, StateError> {
-        let key = StateKey::Position { address, market_id };
-        self.storage.get(&key, self.version)
+        self.storage
+            .get(&StateKey::Position { address, market_id }, self.version)
     }
 
     /// Set position
@@ -152,50 +162,40 @@ impl StateManager {
         market_id: u32,
         position: Position,
     ) -> Result<(), StateError> {
-        let key = StateKey::Position { address, market_id };
-        self.storage.set(key, position)?;
-
-        // Update in-memory position index
+        self.storage
+            .set(StateKey::Position { address, market_id }, position)?;
         self.position_index
             .entry(market_id)
             .or_default()
             .insert(address);
-
-        // Persist position index to state
-        let index_key = StateKey::PositionIndex { market_id };
-        let index = self
-            .position_index
-            .get(&market_id)
-            .cloned()
-            .unwrap_or_default();
-        self.storage.set(index_key, index)?;
-
-        Ok(())
+        self.update_position_index(market_id)
     }
 
     /// Delete position
     pub fn delete_position(&mut self, address: Address, market_id: u32) -> Result<(), StateError> {
-        let key = StateKey::Position { address, market_id };
-        self.storage.delete(key)?;
+        self.storage
+            .delete(StateKey::Position { address, market_id })?;
+        self.remove_from_position_index(market_id, address);
+        self.update_position_index(market_id)
+    }
 
-        // Update in-memory position index
+    /// Remove address from position index
+    fn remove_from_position_index(&mut self, market_id: u32, address: Address) {
         if let Some(addresses) = self.position_index.get_mut(&market_id) {
             addresses.remove(&address);
             if addresses.is_empty() {
                 self.position_index.remove(&market_id);
             }
         }
+    }
 
-        // Persist position index to state
+    /// Update position index in storage
+    fn update_position_index(&self, market_id: u32) -> Result<(), StateError> {
         let index_key = StateKey::PositionIndex { market_id };
-        if let Some(index) = self.position_index.get(&market_id) {
-            self.storage.set(index_key, index.clone())?;
-        } else {
-            // Remove the index if empty
-            self.storage.delete(index_key)?;
+        match self.position_index.get(&market_id) {
+            Some(index) => self.storage.set(index_key, index.clone()),
+            None => self.storage.delete(index_key),
         }
-
-        Ok(())
     }
 
     /// Get all positions for a specific market
@@ -204,105 +204,84 @@ impl StateManager {
         &self,
         market_id: u32,
     ) -> Result<Vec<(Address, Position)>, StateError> {
-        let mut positions = Vec::new();
+        let addresses = self.get_position_addresses(market_id)?;
 
-        // First check in-memory index
-        let addresses = if let Some(addresses) = self.position_index.get(&market_id) {
-            Some(addresses.clone())
-        } else {
-            // If in-memory index is empty (e.g., after restart), rebuild from state
-            let index_key = StateKey::PositionIndex { market_id };
-            self.storage
-                .get::<std::collections::HashSet<Address>>(&index_key, self.version)?
-        };
+        Ok(addresses
+            .into_iter()
+            .filter_map(|address| {
+                self.get_position(address, market_id)
+                    .ok()
+                    .flatten()
+                    .filter(|pos| pos.size > 0)
+                    .map(|position| (address, position))
+            })
+            .collect())
+    }
 
-        if let Some(addresses) = addresses {
-            for address in addresses {
-                if let Some(position) = self.get_position(address, market_id)? {
-                    // Only include positions with non-zero size
-                    if position.size > 0 {
-                        positions.push((address, position));
-                    }
-                }
-            }
-        }
-
-        Ok(positions)
+    /// Get addresses with positions in a market
+    fn get_position_addresses(&self, market_id: u32) -> Result<HashSet<Address>, StateError> {
+        self.position_index
+            .get(&market_id)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| self.get_or_default(StateKey::PositionIndex { market_id }))
     }
 
     /// Rebuild position index from state (called on startup)
     pub fn rebuild_position_index(&mut self) -> Result<(), StateError> {
-        self.position_index.clear();
-
-        // Get all markets
         let markets = self.list_all_markets()?;
 
-        for market_id in markets {
-            // Load position index from state
-            let index_key = StateKey::PositionIndex { market_id };
-            if let Some(addresses) = self
-                .storage
-                .get::<std::collections::HashSet<Address>>(&index_key, self.version)?
-            {
-                self.position_index.insert(market_id, addresses);
-            }
-        }
+        self.position_index = markets
+            .into_iter()
+            .filter_map(|market_id| {
+                let index_key = StateKey::PositionIndex { market_id };
+                self.storage
+                    .get::<HashSet<Address>>(&index_key, self.version)
+                    .ok()
+                    .flatten()
+                    .map(|addresses| (market_id, addresses))
+            })
+            .collect();
 
         Ok(())
     }
 
     /// Get order
     pub fn get_order(&self, order_id: u64) -> Result<Option<Order>, StateError> {
-        let key = StateKey::Order { order_id };
-        self.storage.get(&key, self.version)
+        self.storage
+            .get(&StateKey::Order { order_id }, self.version)
     }
 
     /// Set order
     pub fn set_order(&mut self, order_id: u64, order: Order) -> Result<(), StateError> {
-        let key = StateKey::Order { order_id };
-        self.storage.set(key, order)
+        self.storage.set(StateKey::Order { order_id }, order)
     }
 
     /// Delete order
     pub fn delete_order(&mut self, order_id: u64) -> Result<(), StateError> {
-        let key = StateKey::Order { order_id };
-        self.storage.delete(key)
+        self.storage.delete(StateKey::Order { order_id })
     }
 
     /// Get market info
     pub fn get_market(&self, market_id: u32) -> Result<Option<Market>, StateError> {
-        let key = StateKey::Market { market_id };
-        self.storage.get(&key, self.version)
+        self.storage
+            .get(&StateKey::Market { market_id }, self.version)
     }
 
     /// Set market info
     pub fn set_market(&mut self, market_id: u32, info: Market) -> Result<(), StateError> {
-        let key = StateKey::Market { market_id };
-        self.storage.set(key, info)?;
-
-        // Update market list
-        let mut markets = self.list_all_markets()?;
-        if !markets.contains(&market_id) {
-            markets.push(market_id);
-            let list_key = StateKey::MarketList;
-            self.storage.set(list_key, markets)?;
-        }
-
-        Ok(())
+        self.storage.set(StateKey::Market { market_id }, info)?;
+        self.add_to_list(StateKey::MarketList, market_id)
     }
 
     /// Get list of all market IDs
     pub fn list_all_markets(&self) -> Result<Vec<u32>, StateError> {
-        let key = StateKey::MarketList;
-        Ok(self.storage.get(&key, self.version)?.unwrap_or_default())
+        self.get_or_default(StateKey::MarketList)
     }
 
     /// Get funding rate
     pub fn get_funding_rate(&self, market_id: u32) -> Result<FundingRate, StateError> {
-        let key = StateKey::FundingRate { market_id };
-        self.storage
-            .get(&key, self.version)
-            .map(|v| v.unwrap_or_default())
+        self.get_or_default(StateKey::FundingRate { market_id })
     }
 
     /// Set funding rate
@@ -311,27 +290,22 @@ impl StateManager {
         market_id: u32,
         rate: FundingRate,
     ) -> Result<(), StateError> {
-        let key = StateKey::FundingRate { market_id };
-        self.storage.set(key, rate)
+        self.storage.set(StateKey::FundingRate { market_id }, rate)
     }
 
     /// Get next order ID and increment counter atomically
     pub fn next_order_id(&mut self) -> Result<u64, StateError> {
-        let key = StateKey::NextOrderId;
-        let current: u64 = self.storage.get(&key, self.version)?.unwrap_or(1);
+        let current: u64 = self.get_or_default(StateKey::NextOrderId)?;
         let next = current
             .checked_add(1)
             .ok_or_else(|| StateError::Other("Order ID counter overflow".to_string()))?;
-        self.storage.set(key, next)?;
+        self.storage.set(StateKey::NextOrderId, next)?;
         Ok(current)
     }
 
     /// Check if an address is authorized as a bridge operator
     pub fn is_bridge_operator(&self, address: Address) -> Result<bool, StateError> {
-        let key = StateKey::BridgeOperator { address };
-        self.storage
-            .get(&key, self.version)
-            .map(|v| v.unwrap_or(false))
+        self.get_or_default(StateKey::BridgeOperator { address })
     }
 
     /// Set bridge operator status
@@ -341,39 +315,37 @@ impl StateManager {
         is_operator: bool,
     ) -> Result<(), StateError> {
         let key = StateKey::BridgeOperator { address };
-        if is_operator {
-            self.storage.set(key, true)
-        } else {
-            self.storage.delete(key)
+        match is_operator {
+            true => self.storage.set(key, true),
+            false => self.storage.delete(key),
         }
     }
 
     /// Get asset information
     pub fn get_asset(&self, asset_id: u32) -> Result<Option<Asset>, StateError> {
-        let key = StateKey::AssetInfo { asset_id };
-        self.storage.get(&key, self.version)
+        self.storage
+            .get(&StateKey::AssetInfo { asset_id }, self.version)
     }
 
     /// Register a new asset
     pub fn set_asset(&mut self, asset_id: u32, asset: Asset) -> Result<(), StateError> {
-        let key = StateKey::AssetInfo { asset_id };
-        self.storage.set(key, asset)?;
-
-        // Update asset list
-        let mut assets = self.list_all_assets()?;
-        if !assets.contains(&asset_id) {
-            assets.push(asset_id);
-            let list_key = StateKey::AssetList;
-            self.storage.set(list_key, assets)?;
-        }
-
-        Ok(())
+        self.storage.set(StateKey::AssetInfo { asset_id }, asset)?;
+        self.add_to_list(StateKey::AssetList, asset_id)
     }
 
     /// Get list of all registered asset IDs
     pub fn list_all_assets(&self) -> Result<Vec<u32>, StateError> {
-        let key = StateKey::AssetList;
-        Ok(self.storage.get(&key, self.version)?.unwrap_or_default())
+        self.get_or_default(StateKey::AssetList)
+    }
+
+    /// Generic helper to add item to list if not present
+    fn add_to_list(&mut self, list_key: StateKey, id: u32) -> Result<(), StateError> {
+        let mut list: Vec<u32> = self.get_or_default(list_key.clone())?;
+        if !list.contains(&id) {
+            list.push(id);
+            self.storage.set(list_key, list)?;
+        }
+        Ok(())
     }
 
     /// Get active order IDs for a market
@@ -381,29 +353,23 @@ impl StateManager {
     /// This is used for orderbook recovery. Only active orders are tracked here.
     /// OPTIMIZED: Uses individual keys instead of Vec for O(1) add/remove
     pub fn get_active_orders_by_market(&self, market_id: u32) -> Result<Vec<u64>, StateError> {
-        // Get the set of order IDs from the index
-        // This requires scanning all ActiveOrder keys for this market
-        // For now, we'll use the old approach but with individual key storage
-        let key = StateKey::ActiveOrderList { market_id };
-        Ok(self.storage.get(&key, self.version)?.unwrap_or_default())
+        self.get_or_default(StateKey::ActiveOrderList { market_id })
     }
 
     /// Add an order to the active orders list for a market
     /// OPTIMIZED: O(1) operation using individual key
     pub fn add_active_order(&mut self, market_id: u32, order_id: u64) -> Result<(), StateError> {
-        // Store individual active order flag
-        let key = StateKey::ActiveOrder {
-            market_id,
-            order_id,
-        };
-        self.storage.set(key, true)?;
+        self.storage.set(
+            StateKey::ActiveOrder {
+                market_id,
+                order_id,
+            },
+            true,
+        )?;
 
-        // Also maintain a list for fast iteration (compromise for now)
         let list_key = StateKey::ActiveOrderList { market_id };
-        let mut active_orders: Vec<u64> = self
-            .storage
-            .get(&list_key, self.version)?
-            .unwrap_or_default();
+        let mut active_orders: Vec<u64> = self.get_or_default(list_key.clone())?;
+
         if !active_orders.contains(&order_id) {
             active_orders.push(order_id);
             self.storage.set(list_key, active_orders)?;
@@ -415,23 +381,15 @@ impl StateManager {
     /// Remove an order from the active orders list (when filled or cancelled)
     /// OPTIMIZED: O(1) operation using individual key
     pub fn remove_active_order(&mut self, market_id: u32, order_id: u64) -> Result<(), StateError> {
-        // Remove individual active order flag
-        let key = StateKey::ActiveOrder {
+        self.storage.delete(StateKey::ActiveOrder {
             market_id,
             order_id,
-        };
-        self.storage.delete(key)?;
+        })?;
 
-        // Also update the list
         let list_key = StateKey::ActiveOrderList { market_id };
-        let mut active_orders: Vec<u64> = self
-            .storage
-            .get(&list_key, self.version)?
-            .unwrap_or_default();
+        let mut active_orders: Vec<u64> = self.get_or_default(list_key.clone())?;
         active_orders.retain(|&id| id != order_id);
-        self.storage.set(list_key, active_orders)?;
-
-        Ok(())
+        self.storage.set(list_key, active_orders)
     }
 }
 

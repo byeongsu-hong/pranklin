@@ -67,7 +67,7 @@ fn test_orderbook_rebuild_after_restart() {
         );
 
         let order_id1 = if let TxPayload::PlaceOrder(ref order) = tx1.payload {
-            engine.process_place_order(&tx1, order).unwrap()
+            engine.process_place_order(tx1.from, order).unwrap()
         } else {
             panic!("Wrong payload");
         };
@@ -89,7 +89,7 @@ fn test_orderbook_rebuild_after_restart() {
         );
 
         let order_id2 = if let TxPayload::PlaceOrder(ref order) = tx2.payload {
-            engine.process_place_order(&tx2, order).unwrap()
+            engine.process_place_order(tx2.from, order).unwrap()
         } else {
             panic!("Wrong payload");
         };
@@ -305,7 +305,7 @@ fn test_full_crash_recovery_scenario() {
         );
 
         order_id1 = if let TxPayload::PlaceOrder(ref order) = tx1.payload {
-            engine.process_place_order(&tx1, order).unwrap()
+            engine.process_place_order(tx1.from, order).unwrap()
         } else {
             panic!();
         };
@@ -326,7 +326,7 @@ fn test_full_crash_recovery_scenario() {
         );
 
         order_id2 = if let TxPayload::PlaceOrder(ref order) = tx2.payload {
-            engine.process_place_order(&tx2, order).unwrap()
+            engine.process_place_order(tx2.from, order).unwrap()
         } else {
             panic!();
         };
@@ -415,7 +415,7 @@ fn test_full_crash_recovery_scenario() {
         );
 
         if let TxPayload::PlaceOrder(ref order) = tx3.payload {
-            let order_id3 = engine.process_place_order(&tx3, order).unwrap();
+            let order_id3 = engine.process_place_order(tx3.from, order).unwrap();
             println!("✅ Phase 3: Placed new order #{} after recovery", order_id3);
         }
 
@@ -470,7 +470,7 @@ fn test_recovery_with_multiple_markets() {
             );
 
             if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                engine.process_place_order(&tx, order).unwrap();
+                engine.process_place_order(tx.from, order).unwrap();
             }
         }
 

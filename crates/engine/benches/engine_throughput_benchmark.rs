@@ -84,7 +84,7 @@ fn bench_tps_place_orders_no_match(c: &mut Criterion) {
                         let mut txs = Vec::new();
                         for i in 0..num_txs {
                             let trader = Address::from([(i % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0, // All have nonce 0 initially
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -117,7 +117,7 @@ fn bench_tps_place_orders_no_match(c: &mut Criterion) {
                                 let current_nonce = engine.state().get_nonce(tx.from).unwrap();
                                 if tx.nonce == current_nonce {
                                     // Execute
-                                    let _ = engine.process_place_order(tx, order);
+                                    let _ = engine.process_place_order(tx.from, order);
 
                                     // Increment nonce
                                     let _ = engine.state_mut().increment_nonce(tx.from);
@@ -156,7 +156,7 @@ fn bench_tps_place_orders_with_match(c: &mut Criterion) {
                         engine.state_mut().begin_block(2);
                         for i in 0..(num_txs / 2) {
                             let trader = Address::from([(i % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -171,7 +171,7 @@ fn bench_tps_place_orders_with_match(c: &mut Criterion) {
                                 }),
                             );
                             if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                                let _ = engine.process_place_order(&tx, order);
+                                let _ = engine.process_place_order(tx.from, order);
                                 let _ = engine.state_mut().increment_nonce(tx.from);
                             }
                         }
@@ -181,7 +181,7 @@ fn bench_tps_place_orders_with_match(c: &mut Criterion) {
                         let mut txs = Vec::new();
                         for i in 0..(num_txs / 2) {
                             let trader = Address::from([((i + num_txs / 2) % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -210,7 +210,7 @@ fn bench_tps_place_orders_with_match(c: &mut Criterion) {
                                 let _ = auth.verify_transaction(tx);
                                 let current_nonce = engine.state().get_nonce(tx.from).unwrap();
                                 if tx.nonce == current_nonce {
-                                    let _ = engine.process_place_order(tx, order);
+                                    let _ = engine.process_place_order(tx.from, order);
                                     let _ = engine.state_mut().increment_nonce(tx.from);
                                 }
                             }
@@ -270,7 +270,7 @@ fn bench_tps_mixed_workload(c: &mut Criterion) {
                                 }),
                             };
 
-                            let tx = Transaction::new(0, trader, payload);
+                            let tx = Transaction::new_raw(0, trader, payload);
                             txs.push(tx);
                         }
 
@@ -287,13 +287,13 @@ fn bench_tps_mixed_workload(c: &mut Criterion) {
                                 // Execute based on payload type
                                 match &tx.payload {
                                     TxPayload::Deposit(deposit) => {
-                                        let _ = engine.process_deposit(tx, deposit);
+                                        let _ = engine.process_deposit(tx.from, deposit);
                                     }
                                     TxPayload::Withdraw(withdraw) => {
-                                        let _ = engine.process_withdraw(tx, withdraw);
+                                        let _ = engine.process_withdraw(tx.from, withdraw);
                                     }
                                     TxPayload::PlaceOrder(order) => {
-                                        let _ = engine.process_place_order(tx, order);
+                                        let _ = engine.process_place_order(tx.from, order);
                                     }
                                     _ => {}
                                 }
@@ -337,7 +337,7 @@ fn bench_tps_block_production(c: &mut Criterion) {
                             for i in 0..txs_per_block {
                                 let trader =
                                     Address::from([((i + block_height as usize) % 255) as u8; 20]);
-                                let tx = Transaction::new(
+                                let tx = Transaction::new_raw(
                                     block_height - 2, // Increment nonce per block
                                     trader,
                                     TxPayload::PlaceOrder(PlaceOrderTx {
@@ -356,7 +356,7 @@ fn bench_tps_block_production(c: &mut Criterion) {
                                     let _ = auth.verify_transaction(&tx);
                                     let current_nonce = engine.state().get_nonce(tx.from).unwrap();
                                     if tx.nonce == current_nonce {
-                                        let _ = engine.process_place_order(&tx, order);
+                                        let _ = engine.process_place_order(tx.from, order);
                                         let _ = engine.state_mut().increment_nonce(tx.from);
                                     }
                                 }
@@ -396,7 +396,7 @@ fn bench_tps_high_contention(c: &mut Criterion) {
                         let mut txs = Vec::new();
                         for i in 0..num_txs {
                             let trader = Address::from([(i % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -423,7 +423,7 @@ fn bench_tps_high_contention(c: &mut Criterion) {
                                 let _ = auth.verify_transaction(tx);
                                 let current_nonce = engine.state().get_nonce(tx.from).unwrap();
                                 if tx.nonce == current_nonce {
-                                    let _ = engine.process_place_order(tx, order);
+                                    let _ = engine.process_place_order(tx.from, order);
                                     let _ = engine.state_mut().increment_nonce(tx.from);
                                 }
                             }
@@ -461,7 +461,7 @@ fn bench_tps_large_orderbook(c: &mut Criterion) {
                         engine.state_mut().begin_block(2);
                         for i in 0..orderbook_depth {
                             let trader = Address::from([(i % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -476,7 +476,7 @@ fn bench_tps_large_orderbook(c: &mut Criterion) {
                                 }),
                             );
                             if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                                let _ = engine.process_place_order(&tx, order);
+                                let _ = engine.process_place_order(tx.from, order);
                                 let _ = engine.state_mut().increment_nonce(tx.from);
                             }
                         }
@@ -486,7 +486,7 @@ fn bench_tps_large_orderbook(c: &mut Criterion) {
                         let mut txs = Vec::new();
                         for i in 0..100 {
                             let trader = Address::from([((orderbook_depth + i) % 255) as u8; 20]);
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 0,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -513,7 +513,7 @@ fn bench_tps_large_orderbook(c: &mut Criterion) {
                                 let _ = auth.verify_transaction(tx);
                                 let current_nonce = engine.state().get_nonce(tx.from).unwrap();
                                 if tx.nonce == current_nonce {
-                                    let _ = engine.process_place_order(tx, order);
+                                    let _ = engine.process_place_order(tx.from, order);
                                     let _ = engine.state_mut().increment_nonce(tx.from);
                                 }
                             }

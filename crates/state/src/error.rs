@@ -21,3 +21,15 @@ pub enum StateError {
     #[error("Other error: {0}")]
     Other(String),
 }
+
+impl From<serde_json::Error> for StateError {
+    fn from(err: serde_json::Error) -> Self {
+        StateError::SerializationError(err.to_string())
+    }
+}
+
+impl From<std::io::Error> for StateError {
+    fn from(err: std::io::Error) -> Self {
+        StateError::StorageError(err.to_string())
+    }
+}

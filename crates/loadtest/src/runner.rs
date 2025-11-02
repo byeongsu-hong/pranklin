@@ -10,6 +10,31 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
+/// Send a single transaction
+async fn send_transaction(
+    client: &RpcClient,
+    wallet: &Wallet,
+    config: &LoadTestConfig,
+    metrics: &MetricsCollector,
+) {
+    let start = Instant::now();
+
+    let result = match generator::generate_transaction(
+        wallet,
+        config.tx_type,
+        config.market_id,
+        config.asset_id,
+    ) {
+        Ok(tx) => client.submit_transaction(&tx).await,
+        Err(e) => Err(e),
+    };
+
+    match result {
+        Ok(_) => metrics.record_success(start.elapsed()).await,
+        Err(e) => metrics.record_failure(e.to_string()).await,
+    }
+}
+
 /// Run the load test with the given configuration
 pub async fn run_load_test(config: LoadTestConfig) -> Result<LoadTestResults> {
     // Check server health first
@@ -23,44 +48,14 @@ pub async fn run_load_test(config: LoadTestConfig) -> Result<LoadTestResults> {
         }
     }
 
-    // Initialize wallets
     tracing::info!("💰 Generating {} wallets...", config.num_wallets);
-    let wallets: Vec<Arc<Wallet>> = (0..config.num_wallets)
+    let wallets = (0..config.num_wallets)
         .map(|_| Arc::new(Wallet::new_random()))
-        .collect();
+        .collect::<Vec<_>>();
     tracing::info!("  ✓ Wallets generated");
 
-    // Account setup phase (if operator mode is enabled)
     if config.operator_mode {
-        tracing::info!("\n🔧 PHASE 1: Account Initialization");
-        let setup = AccountSetup::new(client.clone());
-
-        tracing::info!(
-            "⚠️  Bridge operator address: {:?}",
-            setup.operator_address()
-        );
-        tracing::info!(
-            "   Make sure this address is authorized as a bridge operator on the server!"
-        );
-        tracing::info!("   Waiting 3 seconds before proceeding...");
-        tokio::time::sleep(Duration::from_secs(3)).await;
-
-        setup
-            .initialize_wallets(&wallets, config.asset_id, config.initial_balance)
-            .await?;
-
-        // Verify balances
-        let verified = setup
-            .verify_balances(&wallets, config.asset_id, config.initial_balance)
-            .await?;
-
-        if verified < 5 {
-            tracing::warn!(
-                "⚠️  Only {}/10 wallets verified with correct balance",
-                verified
-            );
-            tracing::warn!("   Continuing anyway, but results may be affected...");
-        }
+        setup_accounts(&client, &wallets, config.asset_id, config.initial_balance).await?;
     }
 
     // Initialize metrics
@@ -150,43 +145,34 @@ async fn run_sustained_load(
 
     let start = Instant::now();
     let duration = Duration::from_secs(config.duration_secs);
+    let delay_per_worker =
+        Duration::from_secs_f64(config.num_workers as f64 / config.target_tps as f64);
 
-    // Calculate delay between requests per worker
-    let requests_per_worker_per_sec = config.target_tps as f64 / config.num_workers as f64;
-    let delay_between_requests = Duration::from_secs_f64(1.0 / requests_per_worker_per_sec);
+    let handles = (0..config.num_workers)
+        .map(|worker_id| {
+            let (client, wallets, metrics, config) = (
+                client.clone(),
+                wallets.clone(),
+                metrics.clone(),
+                config.clone(),
+            );
+            let wallet = wallets[worker_id % wallets.len()].clone();
 
-    // Spawn workers
-    let mut handles = Vec::new();
-    for worker_id in 0..config.num_workers {
-        let client = client.clone();
-        let wallets = wallets.clone();
-        let metrics = metrics.clone();
-        let config = config.clone();
-
-        let handle = tokio::spawn(async move {
-            let mut last_request = Instant::now();
-
-            while start.elapsed() < duration {
-                // Wait for the appropriate time
-                let now = Instant::now();
-                if now < last_request + delay_between_requests {
-                    sleep(last_request + delay_between_requests - now).await;
+            tokio::spawn(async move {
+                let mut last_request = Instant::now();
+                while start.elapsed() < duration {
+                    if let Some(wait_time) =
+                        (last_request + delay_per_worker).checked_duration_since(Instant::now())
+                    {
+                        sleep(wait_time).await;
+                    }
+                    last_request = Instant::now();
+                    send_transaction(&client, &wallet, &config, &metrics).await;
                 }
-                last_request = Instant::now();
+            })
+        })
+        .collect::<Vec<_>>();
 
-                // Select a wallet (round-robin)
-                let wallet_idx = worker_id % wallets.len();
-                let wallet = &wallets[wallet_idx];
-
-                // Send transaction
-                send_transaction(&client, wallet, &config, &metrics).await;
-            }
-        });
-
-        handles.push(handle);
-    }
-
-    // Wait for all workers to complete
     for handle in handles {
         let _ = handle.await;
     }
@@ -207,40 +193,34 @@ async fn run_ramp_load(
     let duration = Duration::from_secs(config.duration_secs);
     let ramp_duration = Duration::from_secs(config.ramp_up_secs);
 
-    // Spawn workers
-    let mut handles = Vec::new();
-    for worker_id in 0..config.num_workers {
-        let client = client.clone();
-        let wallets = wallets.clone();
-        let metrics = metrics.clone();
-        let config = config.clone();
+    let handles = (0..config.num_workers)
+        .map(|worker_id| {
+            let (client, wallets, metrics, config) = (
+                client.clone(),
+                wallets.clone(),
+                metrics.clone(),
+                config.clone(),
+            );
+            let wallet = wallets[worker_id % wallets.len()].clone();
 
-        let handle = tokio::spawn(async move {
-            while start.elapsed() < duration {
-                let elapsed = start.elapsed();
+            tokio::spawn(async move {
+                while start.elapsed() < duration {
+                    let elapsed = start.elapsed();
+                    let current_tps = if elapsed < ramp_duration {
+                        (config.target_tps as f64 * elapsed.as_secs_f64()
+                            / ramp_duration.as_secs_f64())
+                        .max(1.0)
+                    } else {
+                        config.target_tps as f64
+                    };
 
-                // Calculate current target TPS based on ramp progress
-                let current_tps = if elapsed < ramp_duration {
-                    let progress = elapsed.as_secs_f64() / ramp_duration.as_secs_f64();
-                    (config.target_tps as f64 * progress).max(1.0)
-                } else {
-                    config.target_tps as f64
-                };
-
-                let requests_per_worker_per_sec = current_tps / config.num_workers as f64;
-                let delay = Duration::from_secs_f64(1.0 / requests_per_worker_per_sec);
-
-                let wallet_idx = worker_id % wallets.len();
-                let wallet = &wallets[wallet_idx];
-
-                send_transaction(&client, wallet, &config, &metrics).await;
-
-                sleep(delay).await;
-            }
-        });
-
-        handles.push(handle);
-    }
+                    let delay = Duration::from_secs_f64(config.num_workers as f64 / current_tps);
+                    send_transaction(&client, &wallet, &config, &metrics).await;
+                    sleep(delay).await;
+                }
+            })
+        })
+        .collect::<Vec<_>>();
 
     for handle in handles {
         let _ = handle.await;
@@ -271,41 +251,43 @@ async fn run_burst_load(
 
         if now >= next_burst {
             in_burst = !in_burst;
-            if in_burst {
-                tracing::info!("💥 BURST START");
-                next_burst = now + burst_duration;
-            } else {
-                tracing::info!("💤 BURST END - cooling down");
-                next_burst = now + (burst_interval - burst_duration);
-            }
+            tracing::info!(
+                "{}",
+                if in_burst {
+                    "💥 BURST START"
+                } else {
+                    "💤 BURST END - cooling down"
+                }
+            );
+            next_burst = now
+                + if in_burst {
+                    burst_duration
+                } else {
+                    burst_interval - burst_duration
+                };
         }
 
         if in_burst {
-            // During burst: maximum load
-            let mut handles = Vec::new();
-            for worker_id in 0..config.num_workers {
-                let client = client.clone();
-                let wallets = wallets.clone();
-                let metrics = metrics.clone();
-                let config = config.clone();
-
-                let handle = tokio::spawn(async move {
-                    let wallet_idx = worker_id % wallets.len();
-                    let wallet = &wallets[wallet_idx];
-                    send_transaction(&client, wallet, &config, &metrics).await;
-                });
-
-                handles.push(handle);
-            }
+            let handles = (0..config.num_workers)
+                .map(|worker_id| {
+                    let (client, wallets, metrics, config) = (
+                        client.clone(),
+                        wallets.clone(),
+                        metrics.clone(),
+                        config.clone(),
+                    );
+                    let wallet = wallets[worker_id % wallets.len()].clone();
+                    tokio::spawn(async move {
+                        send_transaction(&client, &wallet, &config, &metrics).await;
+                    })
+                })
+                .collect::<Vec<_>>();
 
             for handle in handles {
                 let _ = handle.await;
             }
-
-            // Small delay to prevent overwhelming
             sleep(Duration::from_millis(10)).await;
         } else {
-            // Outside burst: idle
             sleep(Duration::from_millis(100)).await;
         }
     }
@@ -325,28 +307,24 @@ async fn run_stress_load(
     let start = Instant::now();
     let duration = Duration::from_secs(config.duration_secs);
 
-    // Spawn workers that send as fast as possible
-    let mut handles = Vec::new();
-    for worker_id in 0..config.num_workers {
-        let client = client.clone();
-        let wallets = wallets.clone();
-        let metrics = metrics.clone();
-        let config = config.clone();
+    let handles = (0..config.num_workers)
+        .map(|worker_id| {
+            let (client, wallets, metrics, config) = (
+                client.clone(),
+                wallets.clone(),
+                metrics.clone(),
+                config.clone(),
+            );
+            let wallet = wallets[worker_id % wallets.len()].clone();
 
-        let handle = tokio::spawn(async move {
-            while start.elapsed() < duration {
-                let wallet_idx = worker_id % wallets.len();
-                let wallet = &wallets[wallet_idx];
-
-                send_transaction(&client, wallet, &config, &metrics).await;
-
-                // Tiny delay to allow other tasks to run
-                tokio::task::yield_now().await;
-            }
-        });
-
-        handles.push(handle);
-    }
+            tokio::spawn(async move {
+                while start.elapsed() < duration {
+                    send_transaction(&client, &wallet, &config, &metrics).await;
+                    tokio::task::yield_now().await;
+                }
+            })
+        })
+        .collect::<Vec<_>>();
 
     for handle in handles {
         let _ = handle.await;
@@ -355,40 +333,38 @@ async fn run_stress_load(
     Ok(())
 }
 
-/// Send a single transaction
-async fn send_transaction(
-    client: &RpcClient,
-    wallet: &Wallet,
-    config: &LoadTestConfig,
-    metrics: &MetricsCollector,
-) {
-    let start = Instant::now();
+/// Setup accounts with initial balances
+async fn setup_accounts(
+    client: &Arc<RpcClient>,
+    wallets: &[Arc<Wallet>],
+    asset_id: u32,
+    initial_balance: u128,
+) -> Result<()> {
+    tracing::info!("\n🔧 PHASE 1: Account Initialization");
+    let setup = AccountSetup::new(client.clone());
 
-    // Generate transaction
-    let tx = match generator::generate_transaction(
-        wallet,
-        config.tx_type,
-        config.market_id,
-        config.asset_id,
-    ) {
-        Ok(tx) => tx,
-        Err(e) => {
-            metrics
-                .record_failure(format!("Transaction generation failed: {}", e))
-                .await;
-            return;
-        }
-    };
+    tracing::info!(
+        "⚠️  Bridge operator address: {:?}",
+        setup.operator_address()
+    );
+    tracing::info!("   Make sure this address is authorized as a bridge operator on the server!");
+    tracing::info!("   Waiting 3 seconds before proceeding...");
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Submit transaction
-    match client.submit_transaction(&tx).await {
-        Ok(_response) => {
-            let latency = start.elapsed();
-            metrics.record_success(latency).await;
-        }
-        Err(e) => {
-            let error_msg = format!("{}", e);
-            metrics.record_failure(error_msg).await;
-        }
+    setup
+        .initialize_wallets(wallets, asset_id, initial_balance)
+        .await?;
+
+    let verified = setup
+        .verify_balances(wallets, asset_id, initial_balance)
+        .await?;
+    if verified < 5 {
+        tracing::warn!(
+            "⚠️  Only {}/10 wallets verified with correct balance",
+            verified
+        );
+        tracing::warn!("   Continuing anyway, but results may be affected...");
     }
+
+    Ok(())
 }

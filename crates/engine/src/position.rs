@@ -1,20 +1,12 @@
-use crate::EngineError;
+use crate::{EngineError, constants::BASIS_POINTS};
 use alloy_primitives::Address;
 use pranklin_state::{Position, StateManager};
 
-// Constants
-const BASIS_POINTS: u128 = 10000;
-
 /// Position manager for handling position updates and calculations
 #[derive(Debug, Clone, Default)]
-pub struct PositionManager {}
+pub struct PositionManager;
 
 impl PositionManager {
-    /// Create a new position manager
-    pub fn new() -> Self {
-        Self {}
-    }
-
     /// Increase an existing position (add to same side)
     fn increase_position(
         &self,
@@ -164,11 +156,19 @@ impl PositionManager {
         position: &Position,
         mark_price: u64,
     ) -> Result<(u128, bool), EngineError> {
+        Self::calculate_pnl_static(position, mark_price)
+    }
+
+    /// Calculate PnL (static version for reuse)
+    pub(crate) fn calculate_pnl_static(
+        position: &Position,
+        mark_price: u64,
+    ) -> Result<(u128, bool), EngineError> {
         if position.size == 0 {
             return Ok((0, true));
         }
 
-        let position_value = (position.size as u128)
+        let entry_value = (position.size as u128)
             .checked_mul(position.entry_price as u128)
             .ok_or(EngineError::Overflow)?;
         let mark_value = (position.size as u128)
@@ -176,15 +176,15 @@ impl PositionManager {
             .ok_or(EngineError::Overflow)?;
 
         let (pnl, is_profit) = if position.is_long {
-            if mark_value >= position_value {
-                (mark_value - position_value, true)
+            if mark_value >= entry_value {
+                (mark_value - entry_value, true)
             } else {
-                (position_value - mark_value, false)
+                (entry_value - mark_value, false)
             }
-        } else if position_value >= mark_value {
-            (position_value - mark_value, true)
+        } else if entry_value >= mark_value {
+            (entry_value - mark_value, true)
         } else {
-            (mark_value - position_value, false)
+            (mark_value - entry_value, false)
         };
 
         Ok((pnl, is_profit))
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_calculate_pnl() {
-        let mgr = PositionManager::new();
+        let mgr = PositionManager::default();
 
         let position = Position {
             size: 100,

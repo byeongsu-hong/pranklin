@@ -1,5 +1,36 @@
 use crate::{RpcError, RpcState, types::*};
 use axum::{Json, extract::State};
+use pranklin_tx::{Transaction, TxPayload};
+
+/// Helper to decode hex transaction
+fn decode_hex_tx(hex: &str) -> Result<Vec<u8>, RpcError> {
+    hex::decode(hex.trim_start_matches("0x"))
+        .map_err(|e| RpcError::InvalidRequest(format!("Invalid hex: {}", e)))
+}
+
+/// Helper to decode and verify transaction
+async fn decode_and_verify_tx(state: &RpcState, hex: &str) -> Result<Transaction, RpcError> {
+    let tx_bytes = decode_hex_tx(hex)?;
+    let tx = Transaction::decode(&tx_bytes)
+        .map_err(|e| RpcError::InvalidRequest(format!("Invalid transaction: {}", e)))?;
+
+    let auth = state.auth.read().await;
+    auth.verify_transaction(&tx)
+        .map_err(|e| RpcError::AuthError(format!("Signature verification failed: {}", e)))?;
+
+    Ok(tx)
+}
+
+/// Helper trait to convert state errors to RPC errors with context
+trait StateResultExt<T> {
+    fn into_rpc_error(self, context: &str) -> Result<T, RpcError>;
+}
+
+impl<T> StateResultExt<T> for Result<T, pranklin_state::StateError> {
+    fn into_rpc_error(self, context: &str) -> Result<T, RpcError> {
+        self.map_err(|e| RpcError::StateError(format!("{}: {}", context, e)))
+    }
+}
 
 /// Health check handler
 pub async fn health() -> &'static str {
@@ -11,27 +42,15 @@ pub async fn submit_transaction(
     State(state): State<RpcState>,
     Json(req): Json<SubmitTxRequest>,
 ) -> Result<Json<SubmitTxResponse>, RpcError> {
-    // Decode transaction
-    let tx_bytes = hex::decode(req.tx.trim_start_matches("0x"))
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid hex: {}", e)))?;
-
-    let tx = pranklin_tx::Transaction::decode(&tx_bytes)
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid transaction: {}", e)))?;
-
-    // Verify transaction signature
-    let auth = state.auth.read().await;
-    auth.verify_transaction(&tx)
-        .map_err(|e| RpcError::AuthError(format!("Signature verification failed: {}", e)))?;
-    drop(auth);
-
-    // Add to mempool
+    let tx = decode_and_verify_tx(&state, &req.tx).await?;
     let tx_hash = tx.hash();
+
     let mut mempool = state.mempool.write().await;
     mempool
         .add(tx)
         .map_err(|e| RpcError::MempoolError(format!("Failed to add to mempool: {}", e)))?;
 
-    Ok(Json(SubmitTxResponse { tx_hash }))
+    Ok(Json(tx_hash.into()))
 }
 
 /// Get transaction status handler
@@ -41,23 +60,14 @@ pub async fn get_transaction_status(
 ) -> Result<Json<TxStatus>, RpcError> {
     let mempool = state.mempool.read().await;
 
-    // Check if transaction is in mempool
-    if mempool.get(&req.tx_hash).is_some() {
-        return Ok(Json(TxStatus {
-            tx_hash: req.tx_hash,
-            status: "pending".to_string(),
-            block_height: None,
-            error: None,
-        }));
-    }
+    let status = if mempool.get(&req.tx_hash).is_some() {
+        TxStatus::pending(req.tx_hash)
+    } else {
+        // In a full implementation, check historical transactions
+        TxStatus::not_found(req.tx_hash)
+    };
 
-    // In a full implementation, check historical transactions
-    Ok(Json(TxStatus {
-        tx_hash: req.tx_hash,
-        status: "not_found".to_string(),
-        block_height: None,
-        error: Some("Transaction not found".to_string()),
-    }))
+    Ok(Json(status))
 }
 
 /// Get balance handler
@@ -69,9 +79,9 @@ pub async fn get_balance(
     let balance = engine
         .state()
         .get_balance(req.address, req.asset_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get balance: {}", e)))?;
+        .into_rpc_error("Failed to get balance")?;
 
-    Ok(Json(GetBalanceResponse { balance }))
+    Ok(Json(balance.into()))
 }
 
 /// Get nonce handler
@@ -83,9 +93,9 @@ pub async fn get_nonce(
     let nonce = engine
         .state()
         .get_nonce(req.address)
-        .map_err(|e| RpcError::StateError(format!("Failed to get nonce: {}", e)))?;
+        .into_rpc_error("Failed to get nonce")?;
 
-    Ok(Json(GetNonceResponse { nonce }))
+    Ok(Json(nonce.into()))
 }
 
 /// Get position handler
@@ -97,19 +107,10 @@ pub async fn get_position(
     let position = engine
         .state()
         .get_position(req.address, req.market_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get position: {}", e)))?;
+        .into_rpc_error("Failed to get position")?
+        .map(|p| PositionInfo::from_position(p, req.market_id));
 
-    let info = position.map(|p| PositionInfo {
-        market_id: req.market_id,
-        size: p.size,
-        entry_price: p.entry_price,
-        is_long: p.is_long,
-        margin: p.margin,
-        unrealized_pnl: 0, // Calculate in full implementation
-        is_profit: true,
-    });
-
-    Ok(Json(info))
+    Ok(Json(position))
 }
 
 /// Get positions handler
@@ -132,20 +133,10 @@ pub async fn get_order(
     let order = engine
         .state()
         .get_order(req.order_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get order: {}", e)))?;
+        .into_rpc_error("Failed to get order")?
+        .map(Into::into);
 
-    let info = order.map(|o| OrderInfo {
-        id: o.id,
-        market_id: o.market_id,
-        owner: o.owner,
-        is_buy: o.is_buy,
-        price: o.price,
-        original_size: o.original_size,
-        remaining_size: o.remaining_size,
-        created_at: o.created_at,
-    });
-
-    Ok(Json(info))
+    Ok(Json(order))
 }
 
 /// List orders handler
@@ -166,20 +157,10 @@ pub async fn get_market_info(
     let market = engine
         .state()
         .get_market(req.market_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get market: {}", e)))?;
+        .into_rpc_error("Failed to get market")?
+        .map(Into::into);
 
-    let info = market.map(|m| MarketInfo {
-        id: m.id,
-        symbol: m.symbol,
-        base_asset_id: m.base_asset_id,
-        quote_asset_id: m.quote_asset_id,
-        price_decimals: m.price_decimals,
-        size_decimals: m.size_decimals,
-        min_order_size: m.min_order_size,
-        max_leverage: m.max_leverage,
-    });
-
-    Ok(Json(info))
+    Ok(Json(market))
 }
 
 /// Get funding rate handler
@@ -191,42 +172,27 @@ pub async fn get_funding_rate(
     let funding = engine
         .state()
         .get_funding_rate(req.market_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get funding rate: {}", e)))?;
+        .into_rpc_error("Failed to get funding rate")?;
 
-    Ok(Json(FundingRateInfo {
-        rate: funding.rate,
-        last_update: funding.last_update,
-        index: funding.index,
-        mark_price: funding.mark_price,
-        oracle_price: funding.oracle_price,
-    }))
+    Ok(Json(funding.into()))
 }
 
 /// Set agent handler
 pub async fn set_agent(
     State(state): State<RpcState>,
     Json(req): Json<SetAgentRequest>,
-) -> Result<Json<SetAgentResponse>, RpcError> {
-    // Decode and verify transaction
-    let tx_bytes = hex::decode(req.tx.trim_start_matches("0x"))
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid hex: {}", e)))?;
+) -> Result<Json<SuccessResponse>, RpcError> {
+    let tx = decode_and_verify_tx(&state, &req.tx).await?;
 
-    let tx = pranklin_tx::Transaction::decode(&tx_bytes)
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid transaction: {}", e)))?;
-
-    // Verify signature
     let mut auth = state.auth.write().await;
-    auth.verify_transaction(&tx)
-        .map_err(|e| RpcError::AuthError(format!("Signature verification failed: {}", e)))?;
-
-    // Extract set agent payload
-    if let pranklin_tx::TxPayload::SetAgent(set_agent) = &tx.payload {
-        auth.set_agent(tx.from, set_agent.agent, set_agent.permissions);
-        Ok(Json(SetAgentResponse { success: true }))
-    } else {
-        Err(RpcError::InvalidRequest(
+    match &tx.payload {
+        TxPayload::SetAgent(set_agent) => {
+            auth.set_agent(tx.from, set_agent.agent, set_agent.permissions);
+            Ok(Json(SuccessResponse::ok()))
+        }
+        _ => Err(RpcError::InvalidRequest(
             "Invalid transaction payload".to_string(),
-        ))
+        )),
     }
 }
 
@@ -234,25 +200,18 @@ pub async fn set_agent(
 pub async fn remove_agent(
     State(state): State<RpcState>,
     Json(req): Json<RemoveAgentRequest>,
-) -> Result<Json<RemoveAgentResponse>, RpcError> {
-    // Similar to set_agent
-    let tx_bytes = hex::decode(req.tx.trim_start_matches("0x"))
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid hex: {}", e)))?;
-
-    let tx = pranklin_tx::Transaction::decode(&tx_bytes)
-        .map_err(|e| RpcError::InvalidRequest(format!("Invalid transaction: {}", e)))?;
+) -> Result<Json<SuccessResponse>, RpcError> {
+    let tx = decode_and_verify_tx(&state, &req.tx).await?;
 
     let mut auth = state.auth.write().await;
-    auth.verify_transaction(&tx)
-        .map_err(|e| RpcError::AuthError(format!("Signature verification failed: {}", e)))?;
-
-    if let pranklin_tx::TxPayload::RemoveAgent(remove_agent) = &tx.payload {
-        auth.remove_agent(tx.from, remove_agent.agent);
-        Ok(Json(RemoveAgentResponse { success: true }))
-    } else {
-        Err(RpcError::InvalidRequest(
+    match &tx.payload {
+        TxPayload::RemoveAgent(remove_agent) => {
+            auth.remove_agent(tx.from, remove_agent.agent);
+            Ok(Json(SuccessResponse::ok()))
+        }
+        _ => Err(RpcError::InvalidRequest(
             "Invalid transaction payload".to_string(),
-        ))
+        )),
     }
 }
 
@@ -274,18 +233,10 @@ pub async fn get_asset_info(
     let asset = engine
         .state()
         .get_asset(req.asset_id)
-        .map_err(|e| RpcError::StateError(format!("Failed to get asset: {}", e)))?;
+        .into_rpc_error("Failed to get asset")?
+        .map(Into::into);
 
-    let info = asset.map(|a| AssetInfo {
-        id: a.id,
-        symbol: a.symbol,
-        name: a.name,
-        decimals: a.decimals,
-        is_collateral: a.is_collateral,
-        collateral_weight_bps: a.collateral_weight_bps,
-    });
-
-    Ok(Json(info))
+    Ok(Json(asset))
 }
 
 /// List all assets handler
@@ -296,25 +247,12 @@ pub async fn list_assets(
     let asset_ids = engine
         .state()
         .list_all_assets()
-        .map_err(|e| RpcError::StateError(format!("Failed to list assets: {}", e)))?;
+        .into_rpc_error("Failed to list assets")?;
 
-    let mut assets = Vec::new();
-    for asset_id in asset_ids {
-        if let Some(asset) = engine
-            .state()
-            .get_asset(asset_id)
-            .map_err(|e| RpcError::StateError(format!("Failed to get asset: {}", e)))?
-        {
-            assets.push(AssetInfo {
-                id: asset.id,
-                symbol: asset.symbol,
-                name: asset.name,
-                decimals: asset.decimals,
-                is_collateral: asset.is_collateral,
-                collateral_weight_bps: asset.collateral_weight_bps,
-            });
-        }
-    }
+    let assets = asset_ids
+        .into_iter()
+        .filter_map(|id| engine.state().get_asset(id).ok().flatten().map(Into::into))
+        .collect();
 
     Ok(Json(ListAssetsResponse { assets }))
 }
@@ -328,7 +266,7 @@ pub async fn check_bridge_operator(
     let is_operator = engine
         .state()
         .is_bridge_operator(req.address)
-        .map_err(|e| RpcError::StateError(format!("Failed to check bridge operator: {}", e)))?;
+        .into_rpc_error("Failed to check bridge operator")?;
 
-    Ok(Json(CheckBridgeOperatorResponse { is_operator }))
+    Ok(Json(is_operator.into()))
 }

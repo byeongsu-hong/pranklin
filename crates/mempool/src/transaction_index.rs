@@ -1,143 +1,159 @@
 use alloy_primitives::{Address, B256};
-use std::collections::{BTreeMap, HashMap};
 use pranklin_tx::Transaction;
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::Index,
+};
 
 /// Index for organizing transactions by sender and nonce
 #[derive(Debug, Clone, Default)]
 pub struct TransactionIndex {
-    /// Transactions by hash
     txs: HashMap<B256, Transaction>,
-    /// Transactions by sender (sorted by nonce)
     by_sender: HashMap<Address, BTreeMap<u64, B256>>,
 }
 
 impl TransactionIndex {
     /// Create a new transaction index
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            txs: HashMap::new(),
-            by_sender: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Insert a transaction into the index
     pub fn insert(&mut self, tx: Transaction) -> B256 {
-        let tx_hash = tx.hash();
-        let sender = tx.from;
-        let nonce = tx.nonce;
-
+        let (tx_hash, sender, nonce) = (tx.hash(), tx.from, tx.nonce);
         self.txs.insert(tx_hash, tx);
         self.by_sender
             .entry(sender)
             .or_default()
             .insert(nonce, tx_hash);
-
         tx_hash
     }
 
     /// Remove a transaction by hash
     pub fn remove(&mut self, tx_hash: &B256) -> Option<Transaction> {
-        if let Some(tx) = self.txs.remove(tx_hash) {
-            // Remove from sender's nonce map
-            if let Some(nonces) = self.by_sender.get_mut(&tx.from) {
-                nonces.remove(&tx.nonce);
-                if nonces.is_empty() {
-                    self.by_sender.remove(&tx.from);
-                }
+        let tx = self.txs.remove(tx_hash)?;
+
+        if let Some(nonces) = self.by_sender.get_mut(&tx.from) {
+            nonces.remove(&tx.nonce);
+            if nonces.is_empty() {
+                self.by_sender.remove(&tx.from);
             }
-            Some(tx)
-        } else {
-            None
         }
+
+        Some(tx)
     }
 
     /// Get a transaction by hash
+    #[must_use]
     pub fn get(&self, tx_hash: &B256) -> Option<&Transaction> {
         self.txs.get(tx_hash)
     }
 
+    /// Get number of unique senders
+    #[must_use]
+    pub fn sender_count(&self) -> usize {
+        self.by_sender.len()
+    }
+
     /// Check if a transaction exists
+    #[must_use]
     pub fn contains(&self, tx_hash: &B256) -> bool {
         self.txs.contains_key(tx_hash)
     }
 
     /// Get all transactions for a sender (sorted by nonce)
+    #[must_use]
     pub fn get_by_sender(&self, sender: &Address) -> Vec<Transaction> {
-        if let Some(nonces) = self.by_sender.get(sender) {
-            nonces
-                .values()
-                .filter_map(|hash| self.txs.get(hash).cloned())
-                .collect()
-        } else {
-            Vec::new()
-        }
+        self.by_sender
+            .get(sender)
+            .map(|nonces| {
+                nonces
+                    .values()
+                    .filter_map(|hash| self.txs.get(hash).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Get transaction count for a sender
+    #[must_use]
     pub fn sender_tx_count(&self, sender: &Address) -> usize {
-        self.by_sender
-            .get(sender)
-            .map(|nonces| nonces.len())
-            .unwrap_or(0)
+        self.by_sender.get(sender).map_or(0, BTreeMap::len)
     }
 
     /// Get the highest nonce for a sender
+    #[must_use]
     pub fn get_highest_nonce(&self, sender: &Address) -> Option<u64> {
-        self.by_sender
-            .get(sender)
-            .and_then(|nonces| nonces.keys().last().copied())
+        self.by_sender.get(sender)?.keys().last().copied()
     }
 
     /// Get the lowest nonce for a sender
     #[allow(dead_code)]
+    #[must_use]
     pub(crate) fn get_lowest_nonce(&self, sender: &Address) -> Option<u64> {
-        self.by_sender
-            .get(sender)
-            .and_then(|nonces| nonces.keys().next().copied())
+        self.by_sender.get(sender)?.keys().next().copied()
     }
 
     /// Check if a specific nonce exists for a sender
+    #[must_use]
     pub fn has_nonce(&self, sender: &Address, nonce: u64) -> bool {
         self.by_sender
             .get(sender)
-            .map(|nonces| nonces.contains_key(&nonce))
-            .unwrap_or(false)
+            .is_some_and(|nonces| nonces.contains_key(&nonce))
     }
 
     /// Remove all transactions for a sender up to (and including) a nonce
     pub fn remove_up_to_nonce(&mut self, sender: &Address, nonce: u64) -> Vec<(B256, Transaction)> {
-        let mut removed = Vec::new();
+        let Some(nonces) = self.by_sender.get_mut(sender) else {
+            return Vec::new();
+        };
 
-        if let Some(nonces) = self.by_sender.get_mut(sender) {
-            let to_remove: Vec<u64> = nonces.keys().filter(|&&n| n <= nonce).copied().collect();
+        let to_remove: Vec<u64> = nonces.keys().filter(|&&n| n <= nonce).copied().collect();
+        let removed = to_remove
+            .into_iter()
+            .filter_map(|n| {
+                let hash = nonces.remove(&n)?;
+                let tx = self.txs.remove(&hash)?;
+                Some((hash, tx))
+            })
+            .collect();
 
-            for n in to_remove {
-                if let Some(hash) = nonces.remove(&n)
-                    && let Some(tx) = self.txs.remove(&hash)
-                {
-                    removed.push((hash, tx));
-                }
-            }
-
-            if nonces.is_empty() {
-                self.by_sender.remove(sender);
-            }
+        if nonces.is_empty() {
+            self.by_sender.remove(sender);
         }
 
         removed
     }
 
     /// Get all senders with pending transactions
+    #[must_use]
     pub fn get_all_senders(&self) -> Vec<Address> {
         self.by_sender.keys().copied().collect()
     }
 
+    /// Iterate over all senders
+    pub fn senders_iter(&self) -> impl Iterator<Item = &Address> {
+        self.by_sender.keys()
+    }
+
+    /// Iterate over transactions for a sender
+    pub fn sender_txs_iter(&self, sender: &Address) -> impl Iterator<Item = &Transaction> + '_ {
+        self.by_sender
+            .get(sender)
+            .into_iter()
+            .flat_map(|nonces| nonces.values())
+            .filter_map(|hash| self.txs.get(hash))
+    }
+
     /// Get total number of transactions
+    #[must_use]
     pub fn len(&self) -> usize {
         self.txs.len()
     }
 
     /// Check if the index is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.txs.is_empty()
     }
@@ -146,6 +162,23 @@ impl TransactionIndex {
     pub fn clear(&mut self) {
         self.txs.clear();
         self.by_sender.clear();
+    }
+}
+
+impl Index<&B256> for TransactionIndex {
+    type Output = Transaction;
+
+    fn index(&self, tx_hash: &B256) -> &Self::Output {
+        self.get(tx_hash).expect("transaction not found")
+    }
+}
+
+impl<'a> IntoIterator for &'a TransactionIndex {
+    type Item = (&'a B256, &'a Transaction);
+    type IntoIter = std::collections::hash_map::Iter<'a, B256, Transaction>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.txs.iter()
     }
 }
 
@@ -162,7 +195,9 @@ mod tests {
                 amount: 1000,
                 asset_id: 0,
             }),
-            signature: [0u8; 65],
+            signature: pranklin_tx::TxSignature::RawBorsh {
+                signature: [0u8; 65],
+            },
         }
     }
 

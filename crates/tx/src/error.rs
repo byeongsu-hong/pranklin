@@ -42,6 +42,12 @@ pub enum TxError {
     #[error("Reduce-only order would increase position")]
     ReduceOnlyWouldIncrease,
 
-    #[error("Other error: {0}")]
+    #[error("{0}")]
     Other(String),
+}
+
+impl From<borsh::io::Error> for TxError {
+    fn from(e: borsh::io::Error) -> Self {
+        TxError::DecodeError(e.to_string())
+    }
 }

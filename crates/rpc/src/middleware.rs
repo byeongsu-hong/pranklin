@@ -60,6 +60,14 @@ pub enum CircuitState {
     HalfOpen,
 }
 
+/// Circuit breaker state
+struct CircuitBreakerState {
+    state: CircuitState,
+    failure_count: u32,
+    success_count: u32,
+    last_failure_time: Option<std::time::Instant>,
+}
+
 /// Circuit breaker for handling cascading failures
 #[derive(Clone)]
 pub struct CircuitBreaker {
@@ -67,13 +75,6 @@ pub struct CircuitBreaker {
     failure_threshold: u32,
     success_threshold: u32,
     timeout: Duration,
-}
-
-struct CircuitBreakerState {
-    state: CircuitState,
-    failure_count: u32,
-    success_count: u32,
-    last_failure_time: Option<std::time::Instant>,
 }
 
 impl CircuitBreaker {
@@ -102,21 +103,16 @@ impl CircuitBreaker {
         let mut state = self.state.write().await;
 
         match state.state {
-            CircuitState::Closed => true,
-            CircuitState::Open => {
-                if let Some(last_failure) = state.last_failure_time {
-                    if last_failure.elapsed() >= self.timeout {
-                        state.state = CircuitState::HalfOpen;
-                        state.success_count = 0;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            CircuitState::HalfOpen => true,
+            CircuitState::Closed | CircuitState::HalfOpen => true,
+            CircuitState::Open => state
+                .last_failure_time
+                .filter(|&last| last.elapsed() >= self.timeout)
+                .map(|_| {
+                    state.state = CircuitState::HalfOpen;
+                    state.success_count = 0;
+                    true
+                })
+                .unwrap_or(false),
         }
     }
 
@@ -125,9 +121,7 @@ impl CircuitBreaker {
         let mut state = self.state.write().await;
 
         match state.state {
-            CircuitState::Closed => {
-                state.failure_count = 0;
-            }
+            CircuitState::Closed => state.failure_count = 0,
             CircuitState::HalfOpen => {
                 state.success_count += 1;
                 if state.success_count >= self.success_threshold {

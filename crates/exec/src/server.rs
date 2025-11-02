@@ -1,5 +1,5 @@
 use crate::constants::*;
-use crate::error::*;
+// Error types are not needed here as we use std::result::Result
 use crate::proto::pb::{
     ExecuteTxsRequest, ExecuteTxsResponse, GetTxsRequest, GetTxsResponse, InitChainRequest,
     InitChainResponse, SetFinalRequest, SetFinalResponse,
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Status};
 
-type Response<T> = Result<tonic::Response<T>, Status>;
+type RpcResponse<T> = std::result::Result<tonic::Response<T>, Status>;
 
 /// Shared components for RPC/gRPC servers
 pub type SharedComponents = (
@@ -22,6 +22,36 @@ pub type SharedComponents = (
     Arc<RwLock<Mempool>>,
     Arc<RwLock<Engine>>,
 );
+
+/// Get default assets configuration
+fn default_assets() -> Vec<pranklin_state::Asset> {
+    vec![
+        pranklin_state::Asset {
+            id: 0,
+            symbol: "USDC".to_string(),
+            name: "USD Coin".to_string(),
+            decimals: 6,
+            is_collateral: true,
+            collateral_weight_bps: 10000, // 100%
+        },
+        pranklin_state::Asset {
+            id: 1,
+            symbol: "USDT".to_string(),
+            name: "Tether USD".to_string(),
+            decimals: 6,
+            is_collateral: true,
+            collateral_weight_bps: 9800, // 98%
+        },
+        pranklin_state::Asset {
+            id: 2,
+            symbol: "DAI".to_string(),
+            name: "Dai Stablecoin".to_string(),
+            decimals: 18,
+            is_collateral: true,
+            collateral_weight_bps: 9500, // 95%
+        },
+    ]
+}
 
 /// Pranklin executor service implementation
 #[derive(Clone)]
@@ -74,116 +104,73 @@ impl PranklinExecutorService {
     }
 
     /// Initialize default assets in the system
-    pub async fn initialize_assets(&self) -> Result<(), String> {
+    pub async fn initialize_assets(&self) -> std::result::Result<(), String> {
         let mut engine = self.engine.write().await;
         let state = engine.state_mut();
-
-        // Asset ID 0: USDC (primary collateral)
-        let usdc = pranklin_state::Asset {
-            id: 0,
-            symbol: "USDC".to_string(),
-            name: "USD Coin".to_string(),
-            decimals: 6,
-            is_collateral: true,
-            collateral_weight_bps: 10000, // 100%
-        };
-        state.set_asset(0, usdc).map_err(|e| e.to_string())?;
-
-        // Asset ID 1: USDT
-        let usdt = pranklin_state::Asset {
-            id: 1,
-            symbol: "USDT".to_string(),
-            name: "Tether USD".to_string(),
-            decimals: 6,
-            is_collateral: true,
-            collateral_weight_bps: 9800, // 98%
-        };
-        state.set_asset(1, usdt).map_err(|e| e.to_string())?;
-
-        // Asset ID 2: DAI
-        let dai = pranklin_state::Asset {
-            id: 2,
-            symbol: "DAI".to_string(),
-            name: "Dai Stablecoin".to_string(),
-            decimals: 18,
-            is_collateral: true,
-            collateral_weight_bps: 9500, // 95%
-        };
-        state.set_asset(2, dai).map_err(|e| e.to_string())?;
-
-        Ok(())
+        default_assets()
+            .into_iter()
+            .try_for_each(|asset| state.set_asset(asset.id, asset).map_err(|e| e.to_string()))
     }
 
     /// Initialize bridge operators
     pub async fn initialize_bridge_operators(
         &self,
         operators: &[alloy_primitives::Address],
-    ) -> Result<(), String> {
+    ) -> std::result::Result<(), String> {
         let mut engine = self.engine.write().await;
         let state = engine.state_mut();
-
-        for operator in operators {
+        operators.iter().try_for_each(|op| {
             state
-                .set_bridge_operator(*operator, true)
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(())
+                .set_bridge_operator(*op, true)
+                .map_err(|e| e.to_string())
+        })
     }
 
     /// Validate chain initialization request
-    fn validate_init_chain(&self, req: &InitChainRequest) -> Result<u64, Status> {
+    fn validate_init_chain(&self, req: &InitChainRequest) -> std::result::Result<u64, Status> {
         if req.chain_id.is_empty() {
-            return Err(validation_error("Chain ID is required"));
+            return Err(Status::invalid_argument("Chain ID is required"));
         }
 
-        let height = if req.initial_height == 0 {
-            tracing::warn!(
-                "Initial height is 0, using default height of {}",
+        Ok(match req.initial_height {
+            0 => {
+                tracing::warn!(
+                    "Initial height is 0, using default height of {}",
+                    GENESIS_HEIGHT
+                );
                 GENESIS_HEIGHT
-            );
-            GENESIS_HEIGHT
-        } else {
-            req.initial_height
-        };
-
-        Ok(height)
+            }
+            height => height,
+        })
     }
 
     /// Get transactions from mempool with size limit
     async fn fetch_txs_from_mempool(&self) -> Vec<Vec<u8>> {
-        let mempool = self.mempool.read().await;
-        let ready_txs = mempool.get_ready_txs(MAX_TXS_PER_BLOCK);
-
+        let ready_txs = self.mempool.read().await.ready_txs(MAX_TXS_PER_BLOCK);
         tracing::debug!("Retrieved {} transactions from mempool", ready_txs.len());
 
-        let mut txs: Vec<Vec<u8>> = Vec::new();
-        let mut total_size = 0u64;
-
-        for tx in ready_txs {
-            let encoded = tx.encode();
-            let tx_size = encoded.len() as u64;
-
-            // Check if adding this tx would exceed max_bytes
-            if total_size + tx_size > self.max_bytes {
-                tracing::debug!(
-                    "Stopping at {} txs due to size limit ({} bytes)",
-                    txs.len(),
-                    total_size
-                );
-                break;
-            }
-
-            txs.push(encoded);
-            total_size += tx_size;
-        }
+        let (txs, total_size) = ready_txs
+            .into_iter()
+            .map(|tx| tx.encode())
+            .scan(0u64, |total, encoded| {
+                let tx_size = encoded.len() as u64;
+                if *total + tx_size > self.max_bytes {
+                    None
+                } else {
+                    *total += tx_size;
+                    Some((encoded, *total))
+                }
+            })
+            .fold((Vec::new(), 0u64), |(mut txs, _), (encoded, total)| {
+                txs.push(encoded);
+                (txs, total)
+            });
 
         tracing::debug!(
             "Returning {} transactions ({} bytes)",
             txs.len(),
             total_size
         );
-
         txs
     }
 
@@ -225,7 +212,7 @@ impl PranklinExecutorService {
 
 #[tonic::async_trait]
 impl ExecutorService for PranklinExecutorService {
-    async fn init_chain(&self, req: Request<InitChainRequest>) -> Response<InitChainResponse> {
+    async fn init_chain(&self, req: Request<InitChainRequest>) -> RpcResponse<InitChainResponse> {
         let req = req.into_inner();
 
         tracing::info!("Initializing chain: {}", req.chain_id);
@@ -243,7 +230,7 @@ impl ExecutorService for PranklinExecutorService {
         let state_root = engine
             .state_mut()
             .commit()
-            .map_err(|e| state_error(format!("Failed to commit genesis state: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to commit genesis state: {}", e)))?;
 
         tracing::info!("Chain initialized with state root: {:?}", state_root);
 
@@ -253,12 +240,15 @@ impl ExecutorService for PranklinExecutorService {
         }))
     }
 
-    async fn get_txs(&self, _req: Request<GetTxsRequest>) -> Response<GetTxsResponse> {
+    async fn get_txs(&self, _req: Request<GetTxsRequest>) -> RpcResponse<GetTxsResponse> {
         let txs = self.fetch_txs_from_mempool().await;
         Ok(tonic::Response::new(GetTxsResponse { txs }))
     }
 
-    async fn execute_txs(&self, req: Request<ExecuteTxsRequest>) -> Response<ExecuteTxsResponse> {
+    async fn execute_txs(
+        &self,
+        req: Request<ExecuteTxsRequest>,
+    ) -> RpcResponse<ExecuteTxsResponse> {
         let req = req.into_inner();
 
         tracing::info!("Executing block at height: {}", req.block_height);
@@ -283,7 +273,7 @@ impl ExecutorService for PranklinExecutorService {
         let state_root = engine
             .state_mut()
             .commit()
-            .map_err(|e| state_error(format!("Failed to commit state: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to commit state: {}", e)))?;
 
         tracing::info!(
             "Block {} committed: state_root={:?}, successful_txs={}, failed_txs={}",
@@ -302,22 +292,18 @@ impl ExecutorService for PranklinExecutorService {
         }))
     }
 
-    async fn set_final(&self, req: Request<SetFinalRequest>) -> Response<SetFinalResponse> {
+    async fn set_final(&self, req: Request<SetFinalRequest>) -> RpcResponse<SetFinalResponse> {
         let req = req.into_inner();
-
         tracing::info!("Finalizing block at height: {}", req.block_height);
 
         if req.block_height == 0 {
             tracing::warn!("Attempt to finalize block 0");
+        } else {
+            tracing::debug!("Block {} finalized successfully", req.block_height);
         }
 
-        // In a full implementation, you would:
-        // 1. Mark the block as finalized
-        // 2. Prune old state versions based on retention policy
-        // 3. Update any finality-dependent logic
-        // 4. Potentially trigger state cleanup
-
-        tracing::debug!("Block {} finalized successfully", req.block_height);
+        // TODO: Implement finalization logic:
+        // - Mark block as finalized, prune old state, update finality-dependent logic
 
         Ok(tonic::Response::new(SetFinalResponse {}))
     }

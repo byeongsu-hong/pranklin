@@ -1,29 +1,9 @@
 use crate::EngineError;
-use alloy_primitives::Address;
 use pranklin_state::{Market, Order, StateManager};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-/// Trade fill information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Fill {
-    /// Maker address
-    pub maker: Address,
-    /// Taker address
-    pub taker: Address,
-    /// Market ID
-    pub market_id: u32,
-    /// Fill price
-    pub price: u64,
-    /// Fill size
-    pub size: u64,
-    /// Taker side (buy/sell)
-    pub taker_is_buy: bool,
-    /// Maker order ID
-    pub maker_order_id: u64,
-    /// Taker order ID
-    pub taker_order_id: u64,
-}
+// Re-export Fill for compatibility
+pub use pranklin_types::Fill;
 
 /// Order book depth: (bids, asks) where each is Vec<(price, size)>
 type OrderBookDepth = (Vec<(u64, u64)>, Vec<(u64, u64)>);
@@ -80,12 +60,7 @@ pub struct OrderbookManager {
 impl OrderbookManager {
     /// Create a new orderbook manager
     pub fn new() -> Self {
-        Self {
-            orders: HashMap::new(),
-            orders_by_market: HashMap::new(),
-            bids: HashMap::new(),
-            asks: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Add an order to the orderbook

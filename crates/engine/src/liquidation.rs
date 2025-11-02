@@ -1,15 +1,13 @@
-use crate::{EngineError, PositionManager};
+use crate::{
+    constants::{
+        BASIS_POINTS, DEFAULT_INSURANCE_FEE_BPS, DEFAULT_LIQUIDATOR_FEE_BPS,
+        DEFAULT_MIN_INSURANCE_RATIO_BPS, MARGIN_BUFFER_BPS, MIN_LIQUIDATION_PCT,
+    },
+    EngineError, PositionManager,
+};
 use alloy_primitives::Address;
 use pranklin_state::{Market, Position, StateManager};
 use std::collections::{BinaryHeap, HashMap};
-
-// Constants
-const BASIS_POINTS: u128 = 10000;
-const DEFAULT_LIQUIDATOR_FEE_BPS: u32 = 5000; // 50%
-const DEFAULT_INSURANCE_FEE_BPS: u32 = 5000; // 50%
-const DEFAULT_MIN_INSURANCE_RATIO_BPS: u32 = 100; // 1%
-const MARGIN_BUFFER_BPS: u32 = 200; // 2% buffer for partial liquidations
-const MIN_LIQUIDATION_PCT: u64 = 10; // 10% minimum liquidation size
 
 /// Position risk information for liquidation priority
 #[derive(Debug, Clone, PartialEq)]
@@ -37,7 +35,7 @@ impl Ord for PositionRisk {
 }
 
 /// Liquidation result details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct LiquidationResult {
     pub trader: Address,
     pub market_id: u32,
@@ -52,7 +50,7 @@ pub struct LiquidationResult {
 }
 
 /// Insurance fund state per market
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct InsuranceFund {
     pub balance: u128,
     pub total_contributions: u128,
@@ -94,15 +92,8 @@ pub struct LiquidationEngine {
 
 impl Default for LiquidationEngine {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LiquidationEngine {
-    /// Create a new advanced liquidation engine
-    pub fn new() -> Self {
         Self {
-            position_mgr: PositionManager::new(),
+            position_mgr: PositionManager::default(),
             at_risk_positions: HashMap::new(),
             insurance_funds: HashMap::new(),
             fee_split: (DEFAULT_LIQUIDATOR_FEE_BPS, DEFAULT_INSURANCE_FEE_BPS),
@@ -111,7 +102,9 @@ impl LiquidationEngine {
             adl_enabled: true,
         }
     }
+}
 
+impl LiquidationEngine {
     /// Configure fee split between liquidator and insurance fund
     pub fn set_fee_split(&mut self, liquidator_bps: u32, insurance_fund_bps: u32) {
         assert_eq!(
@@ -743,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_partial_liquidation_calculation() {
-        let liquidation = LiquidationEngine::new();
+        let liquidation = LiquidationEngine::default();
 
         let position = Position {
             size: 1000,
@@ -781,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_insurance_fund() {
-        let mut liquidation = LiquidationEngine::new();
+        let mut liquidation = LiquidationEngine::default();
 
         // Initially empty
         let fund = liquidation.get_insurance_fund(0);
@@ -796,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_fee_split_configuration() {
-        let mut liquidation = LiquidationEngine::new();
+        let mut liquidation = LiquidationEngine::default();
 
         // Default is 50/50
         assert_eq!(liquidation.fee_split, (5000, 5000));
@@ -809,7 +802,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Fee split must sum to 10000 bps")]
     fn test_invalid_fee_split() {
-        let mut liquidation = LiquidationEngine::new();
+        let mut liquidation = LiquidationEngine::default();
         // Should panic - doesn't sum to 10000
         liquidation.set_fee_split(6000, 3000);
     }

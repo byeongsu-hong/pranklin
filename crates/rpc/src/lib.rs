@@ -38,48 +38,13 @@ pub struct RpcState {
 }
 
 impl RpcState {
-    /// Create a new RPC state
+    /// Create a new RPC state with core components
     pub fn new(auth: AuthService, mempool: Mempool, engine: Engine) -> Self {
-        Self {
-            auth: Arc::new(RwLock::new(auth)),
-            mempool: Arc::new(RwLock::new(mempool)),
-            engine: Arc::new(RwLock::new(engine)),
-            metrics: None,
-            ws_broadcaster: None,
-        }
-    }
-
-    /// Create a new RPC state with metrics
-    pub fn new_with_metrics(
-        auth: AuthService,
-        mempool: Mempool,
-        engine: Engine,
-        metrics: Metrics,
-    ) -> Self {
-        Self {
-            auth: Arc::new(RwLock::new(auth)),
-            mempool: Arc::new(RwLock::new(mempool)),
-            engine: Arc::new(RwLock::new(engine)),
-            metrics: Some(Arc::new(metrics)),
-            ws_broadcaster: None,
-        }
-    }
-
-    /// Create a new RPC state with all features
-    pub fn new_with_features(
-        auth: AuthService,
-        mempool: Mempool,
-        engine: Engine,
-        metrics: Option<Metrics>,
-        ws_broadcaster: Option<WsBroadcaster>,
-    ) -> Self {
-        Self {
-            auth: Arc::new(RwLock::new(auth)),
-            mempool: Arc::new(RwLock::new(mempool)),
-            engine: Arc::new(RwLock::new(engine)),
-            metrics: metrics.map(Arc::new),
-            ws_broadcaster: ws_broadcaster.map(Arc::new),
-        }
+        Self::new_from_shared(
+            Arc::new(RwLock::new(auth)),
+            Arc::new(RwLock::new(mempool)),
+            Arc::new(RwLock::new(engine)),
+        )
     }
 
     /// Create RPC state from shared components
@@ -97,20 +62,16 @@ impl RpcState {
         }
     }
 
-    /// Create RPC state from shared components with metrics
-    pub fn new_from_shared_with_metrics(
-        auth: Arc<RwLock<AuthService>>,
-        mempool: Arc<RwLock<Mempool>>,
-        engine: Arc<RwLock<Engine>>,
-        metrics: Metrics,
-    ) -> Self {
-        Self {
-            auth,
-            mempool,
-            engine,
-            metrics: Some(Arc::new(metrics)),
-            ws_broadcaster: None,
-        }
+    /// Add metrics to the RPC state
+    pub fn with_metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = Some(Arc::new(metrics));
+        self
+    }
+
+    /// Add WebSocket broadcaster to the RPC state
+    pub fn with_ws_broadcaster(mut self, broadcaster: WsBroadcaster) -> Self {
+        self.ws_broadcaster = Some(Arc::new(broadcaster));
+        self
     }
 }
 

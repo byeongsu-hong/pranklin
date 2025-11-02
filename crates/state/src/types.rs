@@ -1,7 +1,10 @@
-use alloy_primitives::Address;
 use jmt::KeyHash;
+use pranklin_types::Address;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+
+// Re-export from pranklin-types
+pub use pranklin_types::{Asset, FundingRate, Market, Order, OrderStatus, Position};
 
 /// State key types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,172 +51,15 @@ impl StateKey {
     /// Hash the key for use in the merkle tree
     pub fn hash(&self) -> KeyHash {
         let bytes = serde_json::to_vec(self).unwrap();
-        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
-        hasher.update(&bytes);
-        let result = hasher.finalize();
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(result.as_slice());
-        KeyHash(hash)
+        let hash = sha2::Sha256::digest(&bytes);
+        KeyHash(hash.into())
     }
 }
 
-/// Position information
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Position {
-    /// Position size (in base units)
-    pub size: u64,
-    /// Entry price (in base units)
-    pub entry_price: u64,
-    /// Long or short
-    pub is_long: bool,
-    /// Margin (collateral)
-    pub margin: u128,
-    /// Last funding index when position was updated
-    pub funding_index: u128,
-}
-
-/// Order status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OrderStatus {
-    /// Order is active and can be matched
-    Active,
-    /// Order has been fully filled
-    Filled,
-    /// Order has been cancelled
-    Cancelled,
-}
-
-/// Order information
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Order {
-    /// Order ID
-    pub id: u64,
-    /// Market ID
-    pub market_id: u32,
-    /// Owner address
-    pub owner: Address,
-    /// Buy or sell
-    pub is_buy: bool,
-    /// Price
-    pub price: u64,
-    /// Original size
-    pub original_size: u64,
-    /// Remaining size
-    pub remaining_size: u64,
-    /// Order status
-    pub status: OrderStatus,
-    /// Block when order was created
-    pub created_at: u64,
-    /// Reduce only flag
-    pub reduce_only: bool,
-    /// Post only flag
-    pub post_only: bool,
-}
-
-/// Market information
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Market {
-    /// Market ID
-    pub id: u32,
-    /// Market name/symbol
-    pub symbol: String,
-    /// Base asset ID
-    pub base_asset_id: u32,
-    /// Quote asset ID
-    pub quote_asset_id: u32,
-    /// Tick size (minimum price increment in base units)
-    ///
-    /// All prices must be multiples of tick_size.
-    /// Example: tick_size = 100 means prices move in increments of 100 base units
-    /// (e.g., if base unit is 1 cent, tick_size=100 means $1.00 increments)
-    pub tick_size: u64,
-    /// Price precision (decimals for display)
-    pub price_decimals: u8,
-    /// Size precision (decimals)
-    pub size_decimals: u8,
-    /// Minimum order size
-    pub min_order_size: u64,
-    /// Maximum order size (prevent manipulation)
-    pub max_order_size: u64,
-    /// Maximum leverage
-    pub max_leverage: u32,
-    /// Maintenance margin ratio (in basis points)
-    pub maintenance_margin_bps: u32,
-    /// Initial margin ratio (in basis points)
-    pub initial_margin_bps: u32,
-    /// Liquidation fee (in basis points)
-    pub liquidation_fee_bps: u32,
-    /// Funding rate interval (in seconds)
-    pub funding_interval: u64,
-    /// Maximum funding rate (in basis points)
-    pub max_funding_rate_bps: u32,
-}
-
-impl Market {
-    /// Normalize price to nearest tick
-    ///
-    /// Rounds the price to the nearest valid tick boundary.
-    pub fn normalize_price(&self, price: u64) -> u64 {
-        if self.tick_size == 0 {
-            return price; // Avoid division by zero
-        }
-        // Round to nearest tick
-        ((price + self.tick_size / 2) / self.tick_size) * self.tick_size
+impl From<StateKey> for KeyHash {
+    fn from(key: StateKey) -> Self {
+        key.hash()
     }
-
-    /// Validate that price is on a valid tick boundary
-    pub fn validate_price(&self, price: u64) -> bool {
-        if self.tick_size == 0 {
-            return true; // No tick restriction
-        }
-        price.is_multiple_of(self.tick_size)
-    }
-
-    /// Convert price to tick ID
-    pub fn price_to_tick(&self, price: u64) -> u64 {
-        if self.tick_size == 0 {
-            return price;
-        }
-        price / self.tick_size
-    }
-
-    /// Convert tick ID to price
-    pub fn tick_to_price(&self, tick: u64) -> u64 {
-        tick * self.tick_size
-    }
-}
-
-/// Funding rate information
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct FundingRate {
-    /// Current funding rate (per interval, in basis points)
-    pub rate: i64,
-    /// Last update timestamp
-    pub last_update: u64,
-    /// Cumulative funding index
-    pub index: i128,
-    /// Mark price at last update
-    pub mark_price: u64,
-    /// Oracle price at last update
-    pub oracle_price: u64,
-}
-
-/// Asset information
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Asset {
-    /// Asset ID (unique identifier)
-    pub id: u32,
-    /// Asset symbol (e.g., "USDC", "USDT", "ETH")
-    pub symbol: String,
-    /// Asset name (e.g., "USD Coin")
-    pub name: String,
-    /// Decimals for display
-    pub decimals: u8,
-    /// Whether this asset can be used as collateral
-    pub is_collateral: bool,
-    /// Collateral weight in basis points (e.g., 10000 = 100%, 9000 = 90%)
-    /// Used for calculating collateral value
-    pub collateral_weight_bps: u32,
 }
 
 #[cfg(test)]

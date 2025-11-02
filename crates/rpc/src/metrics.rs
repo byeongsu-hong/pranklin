@@ -238,16 +238,12 @@ impl Metrics {
 
     /// Update mempool size
     pub fn set_mempool_size(&self, size: i64) {
-        self.mempool_size
-            .with_label_values(&[] as &[&str])
-            .set(size as f64);
+        self.mempool_size.with_label_values::<&str>(&[]).set(size as f64);
     }
 
     /// Update block height
     pub fn set_block_height(&self, height: u64) {
-        self.block_height
-            .with_label_values(&[] as &[&str])
-            .set(height as f64);
+        self.block_height.with_label_values::<&str>(&[]).set(height as f64);
     }
 }
 

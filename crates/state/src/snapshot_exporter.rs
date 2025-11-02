@@ -41,16 +41,12 @@ pub struct S3Config {
     pub prefix: String,
 }
 
-impl S3Config {
-    pub fn new(
-        bucket: impl Into<String>,
-        region: impl Into<String>,
-        prefix: impl Into<String>,
-    ) -> Self {
+impl From<(String, String, String)> for S3Config {
+    fn from((bucket, region, prefix): (String, String, String)) -> Self {
         Self {
-            bucket: bucket.into(),
-            region: region.into(),
-            prefix: prefix.into(),
+            bucket,
+            region,
+            prefix,
         }
     }
 }
@@ -62,12 +58,9 @@ pub struct GCSConfig {
     pub prefix: String,
 }
 
-impl GCSConfig {
-    pub fn new(bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
-        Self {
-            bucket: bucket.into(),
-            prefix: prefix.into(),
-        }
+impl From<(String, String)> for GCSConfig {
+    fn from((bucket, prefix): (String, String)) -> Self {
+        Self { bucket, prefix }
     }
 }
 
@@ -496,27 +489,30 @@ impl SnapshotExporter {
 
 /// Get directory size recursively
 fn get_dir_size(path: &Path) -> Result<u64, StateError> {
-    let mut size = 0;
-    if path.is_dir() {
-        for entry in std::fs::read_dir(path)
-            .map_err(|e| StateError::StorageError(format!("Failed to read directory: {}", e)))?
-        {
+    if !path.is_dir() {
+        return Ok(0);
+    }
+
+    std::fs::read_dir(path)
+        .map_err(|e| StateError::StorageError(format!("Failed to read directory: {}", e)))?
+        .try_fold(0u64, |acc, entry| {
             let entry = entry
                 .map_err(|e| StateError::StorageError(format!("Failed to read entry: {}", e)))?;
             let path = entry.path();
-            if path.is_dir() {
-                size += get_dir_size(&path)?;
+
+            let size = if path.is_dir() {
+                get_dir_size(&path)?
             } else {
-                size += entry
+                entry
                     .metadata()
                     .map_err(|e| {
                         StateError::StorageError(format!("Failed to get metadata: {}", e))
                     })?
-                    .len();
-            }
-        }
-    }
-    Ok(size)
+                    .len()
+            };
+
+            Ok(acc + size)
+        })
 }
 
 #[cfg(test)]

@@ -55,21 +55,49 @@ pub enum MempoolError {
 
 impl MempoolError {
     /// Check if error is retryable
-    pub fn is_retryable(&self) -> bool {
-        matches!(self, MempoolError::MempoolFull(_))
+    #[must_use]
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::MempoolFull(_))
     }
 
     /// Check if error is due to rate limiting
-    pub fn is_rate_limited(&self) -> bool {
-        matches!(self, MempoolError::RateLimitExceeded { .. })
+    #[must_use]
+    pub const fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::RateLimitExceeded { .. })
     }
 
     /// Check if error is due to nonce issues
-    pub fn is_nonce_error(&self) -> bool {
-        matches!(
-            self,
-            MempoolError::InvalidNonce { .. } | MempoolError::NonceGap { .. }
-        )
+    #[must_use]
+    pub const fn is_nonce_error(&self) -> bool {
+        matches!(self, Self::InvalidNonce { .. } | Self::NonceGap { .. })
+    }
+}
+
+impl From<&str> for MempoolError {
+    fn from(s: &str) -> Self {
+        Self::Other(s.to_string())
+    }
+}
+
+impl From<String> for MempoolError {
+    fn from(s: String) -> Self {
+        Self::Other(s)
+    }
+}
+
+impl AsRef<str> for MempoolError {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::MempoolFull(_) => "mempool full",
+            Self::DuplicateTransaction(_) => "duplicate transaction",
+            Self::TransactionNotFound(_) => "transaction not found",
+            Self::InvalidNonce { .. } => "invalid nonce",
+            Self::NonceGap { .. } => "nonce gap",
+            Self::RateLimitExceeded { .. } => "rate limit exceeded",
+            Self::InvalidConfig(_) => "invalid config",
+            Self::ValidationFailed(_) => "validation failed",
+            Self::Other(_) => "other error",
+        }
     }
 }
 
@@ -98,5 +126,23 @@ mod tests {
             expected: 3,
         };
         assert!(nonce_error.is_nonce_error());
+    }
+
+    #[test]
+    fn test_error_conversions() {
+        let err: MempoolError = "test error".into();
+        assert!(matches!(err, MempoolError::Other(_)));
+
+        let err: MempoolError = String::from("another error").into();
+        assert!(matches!(err, MempoolError::Other(_)));
+    }
+
+    #[test]
+    fn test_error_as_ref() {
+        let err = MempoolError::MempoolFull(100);
+        assert_eq!(err.as_ref(), "mempool full");
+
+        let err = MempoolError::DuplicateTransaction(Default::default());
+        assert_eq!(err.as_ref(), "duplicate transaction");
     }
 }

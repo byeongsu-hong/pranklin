@@ -62,7 +62,7 @@ fn bench_place_order(c: &mut Criterion) {
                     |(mut engine, trader)| {
                         // Benchmark: Place orders
                         for i in 0..num_orders {
-                            let tx = Transaction::new(
+                            let tx = Transaction::new_raw(
                                 i,
                                 trader,
                                 TxPayload::PlaceOrder(PlaceOrderTx {
@@ -78,7 +78,7 @@ fn bench_place_order(c: &mut Criterion) {
                             );
 
                             if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                                let _ = black_box(engine.process_place_order(&tx, order));
+                                let _ = black_box(engine.process_place_order(tx.from, order));
                             }
                         }
                     },
@@ -106,7 +106,7 @@ fn bench_order_matching(c: &mut Criterion) {
 
                 // Place 100 maker orders
                 for i in 0..100 {
-                    let tx = Transaction::new(
+                    let tx = Transaction::new_raw(
                         i,
                         maker,
                         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -122,7 +122,7 @@ fn bench_order_matching(c: &mut Criterion) {
                     );
 
                     if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                        engine.process_place_order(&tx, order).unwrap();
+                        engine.process_place_order(tx.from, order).unwrap();
                     }
                 }
 
@@ -130,7 +130,7 @@ fn bench_order_matching(c: &mut Criterion) {
             },
             |(mut engine, taker)| {
                 // Benchmark: Place taker order that matches
-                let tx = Transaction::new(
+                let tx = Transaction::new_raw(
                     0,
                     taker,
                     TxPayload::PlaceOrder(PlaceOrderTx {
@@ -146,7 +146,7 @@ fn bench_order_matching(c: &mut Criterion) {
                 );
 
                 if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                    let _ = black_box(engine.process_place_order(&tx, order));
+                    let _ = black_box(engine.process_place_order(tx.from, order));
                 }
             },
             criterion::BatchSize::SmallInput,
@@ -180,7 +180,7 @@ fn bench_orderbook_rebuild(c: &mut Criterion) {
                         .unwrap();
 
                     for i in 0..num_orders {
-                        let tx = Transaction::new(
+                        let tx = Transaction::new_raw(
                             i,
                             trader,
                             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -196,7 +196,7 @@ fn bench_orderbook_rebuild(c: &mut Criterion) {
                         );
 
                         if let TxPayload::PlaceOrder(ref order) = tx.payload {
-                            engine.process_place_order(&tx, order).unwrap();
+                            engine.process_place_order(tx.from, order).unwrap();
                         }
                     }
 

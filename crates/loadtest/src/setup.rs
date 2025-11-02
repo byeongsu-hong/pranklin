@@ -2,8 +2,8 @@ use crate::client::RpcClient;
 use crate::wallet::Wallet;
 use alloy_primitives::Address;
 use anyhow::Result;
-use std::sync::Arc;
 use pranklin_tx::{B256, BridgeDepositTx, TxPayload};
+use std::sync::Arc;
 
 /// Setup phase: Initialize accounts with mock balances using bridge operator authority
 pub struct AccountSetup {
@@ -42,42 +42,34 @@ impl AccountSetup {
             asset_id
         );
 
-        let mut success_count = 0;
-        let mut error_count = 0;
+        let (mut success_count, mut error_count) = (0, 0);
 
         for (idx, wallet) in wallets.iter().enumerate() {
-            // Create bridge deposit transaction
             let mut random_bytes = [0u8; 32];
             fastrand::fill(&mut random_bytes);
-            let external_tx_hash = B256::from(random_bytes);
 
             let payload = TxPayload::BridgeDeposit(BridgeDepositTx {
                 user: wallet.address(),
                 amount: amount_per_wallet,
                 asset_id,
-                external_tx_hash,
+                external_tx_hash: B256::from(random_bytes),
             });
 
-            match self.operator_wallet.create_signed_transaction(payload) {
-                Ok(tx) => match self.client.submit_transaction(&tx).await {
-                    Ok(_) => {
-                        success_count += 1;
-                        if (idx + 1) % 10 == 0 {
-                            tracing::debug!("  Initialized {}/{} wallets", idx + 1, wallets.len());
-                        }
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        tracing::warn!("  Failed to initialize wallet {}: {}", idx, e);
-                    }
-                },
-                Err(e) => {
-                    error_count += 1;
-                    tracing::warn!("  Failed to create tx for wallet {}: {}", idx, e);
+            let result = match self.operator_wallet.create_signed_transaction(payload) {
+                Ok(tx) => self.client.submit_transaction(&tx).await,
+                Err(e) => Err(e),
+            };
+
+            if result.is_ok() {
+                success_count += 1;
+                if (idx + 1) % 10 == 0 {
+                    tracing::debug!("  Initialized {}/{} wallets", idx + 1, wallets.len());
                 }
+            } else {
+                error_count += 1;
+                tracing::warn!("  Failed to initialize wallet {}", idx);
             }
 
-            // Small delay to avoid overwhelming the server during setup
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
 
@@ -104,17 +96,10 @@ impl AccountSetup {
         tracing::info!("🔍 Verifying wallet balances...");
 
         let mut verified = 0;
-
         for wallet in wallets.iter().take(10) {
-            // Sample first 10 wallets
-            match self.client.get_balance(wallet.address(), asset_id).await {
-                Ok(response) => {
-                    if response.balance >= expected_amount {
-                        verified += 1;
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("  Failed to get balance: {}", e);
+            if let Ok(response) = self.client.get_balance(wallet.address(), asset_id).await {
+                if response.balance >= expected_amount {
+                    verified += 1;
                 }
             }
         }

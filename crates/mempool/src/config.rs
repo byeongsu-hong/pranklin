@@ -11,7 +11,8 @@ pub struct MempoolConfig {
 
 impl MempoolConfig {
     /// Create a new mempool configuration
-    pub fn new(max_size: usize, max_txs_per_sender: usize) -> Self {
+    #[must_use]
+    pub const fn new(max_size: usize, max_txs_per_sender: usize) -> Self {
         Self {
             max_size,
             max_txs_per_sender,
@@ -20,33 +21,45 @@ impl MempoolConfig {
     }
 
     /// Create configuration with relaxed nonce ordering
-    pub fn with_relaxed_nonce_ordering(mut self) -> Self {
+    #[must_use]
+    pub const fn with_relaxed_nonce_ordering(mut self) -> Self {
         self.strict_nonce_ordering = false;
         self
     }
 
     /// Validate configuration parameters
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub const fn validate(&self) -> Result<(), &'static str> {
         if self.max_size == 0 {
-            return Err("max_size must be greater than 0");
+            Err("max_size must be greater than 0")
+        } else if self.max_txs_per_sender == 0 {
+            Err("max_txs_per_sender must be greater than 0")
+        } else if self.max_txs_per_sender > self.max_size {
+            Err("max_txs_per_sender cannot exceed max_size")
+        } else {
+            Ok(())
         }
-        if self.max_txs_per_sender == 0 {
-            return Err("max_txs_per_sender must be greater than 0");
+    }
+}
+
+impl From<(usize, usize)> for MempoolConfig {
+    fn from((max_size, max_txs_per_sender): (usize, usize)) -> Self {
+        Self::new(max_size, max_txs_per_sender)
+    }
+}
+
+impl From<(usize, usize, bool)> for MempoolConfig {
+    fn from((max_size, max_txs_per_sender, strict_nonce_ordering): (usize, usize, bool)) -> Self {
+        Self {
+            max_size,
+            max_txs_per_sender,
+            strict_nonce_ordering,
         }
-        if self.max_txs_per_sender > self.max_size {
-            return Err("max_txs_per_sender cannot exceed max_size");
-        }
-        Ok(())
     }
 }
 
 impl Default for MempoolConfig {
     fn default() -> Self {
-        Self {
-            max_size: 10_000,
-            max_txs_per_sender: 100,
-            strict_nonce_ordering: true,
-        }
+        Self::new(10_000, 100)
     }
 }
 
@@ -55,7 +68,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
+    fn test_default_and_validation() {
         let config = MempoolConfig::default();
         assert_eq!(config.max_size, 10_000);
         assert_eq!(config.max_txs_per_sender, 100);
@@ -64,20 +77,18 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation() {
-        let invalid_config = MempoolConfig {
-            max_size: 0,
-            max_txs_per_sender: 100,
-            strict_nonce_ordering: true,
-        };
-        assert!(invalid_config.validate().is_err());
+    fn test_from_tuple() {
+        let config: MempoolConfig = (1000, 50).into();
+        assert_eq!(config.max_size, 1000);
+        assert_eq!(config.max_txs_per_sender, 50);
+    }
 
-        let invalid_config = MempoolConfig {
-            max_size: 100,
-            max_txs_per_sender: 200,
-            strict_nonce_ordering: true,
-        };
-        assert!(invalid_config.validate().is_err());
+    #[test]
+    fn test_validation_errors() {
+        assert!(MempoolConfig::new(0, 100).validate().is_err());
+        assert!(MempoolConfig::new(100, 0).validate().is_err());
+        assert!(MempoolConfig::new(100, 200).validate().is_err());
+        assert!(MempoolConfig::new(100, 100).validate().is_ok());
     }
 
     #[test]

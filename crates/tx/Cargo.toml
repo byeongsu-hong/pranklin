@@ -9,6 +9,9 @@ version.workspace = true
 alloy-primitives = { workspace = true, features = ["borsh"] }
 borsh            = { workspace = true }
 hex              = { workspace = true }
+pranklin-macros  = { workspace = true }
+pranklin-state   = { workspace = true }
+pranklin-types   = { workspace = true }
 serde            = { workspace = true }
 sha2             = { workspace = true }
 thiserror        = { workspace = true }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::time::Duration;
 use pranklin_tx::{B256, Transaction};
 
@@ -10,8 +10,13 @@ pub struct RpcClient {
     base_url: String,
 }
 
+trait RpcRequest: Serialize {}
+trait RpcResponse: DeserializeOwned {}
+
+impl<T: Serialize> RpcRequest for T {}
+impl<T: DeserializeOwned> RpcResponse for T {}
+
 impl RpcClient {
-    /// Create a new RPC client
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -23,79 +28,57 @@ impl RpcClient {
         Self { client, base_url }
     }
 
-    /// Submit a transaction
-    pub async fn submit_transaction(&self, tx: &Transaction) -> Result<SubmitTxResponse> {
-        let encoded = tx.encode();
-        let hex_tx = format!("0x{}", hex::encode(encoded));
-
-        let request = SubmitTxRequest { tx: hex_tx };
-
-        let url = format!("{}/tx/submit", self.base_url);
+    async fn post_json<Req: RpcRequest, Res: RpcResponse>(
+        &self,
+        endpoint: &str,
+        request: &Req,
+    ) -> Result<Res> {
+        let url = format!("{}{}", self.base_url, endpoint);
         let response = self
             .client
             .post(&url)
-            .json(&request)
+            .json(request)
             .send()
             .await?
             .error_for_status()?;
-
-        let result: SubmitTxResponse = response.json().await?;
-        Ok(result)
+        Ok(response.json().await?)
     }
 
-    /// Get transaction status
+    pub async fn submit_transaction(&self, tx: &Transaction) -> Result<SubmitTxResponse> {
+        let request = SubmitTxRequest {
+            tx: format!("0x{}", hex::encode(tx.encode())),
+        };
+        self.post_json("/tx/submit", &request).await
+    }
+
     #[allow(dead_code)]
     pub async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
-        let request = GetTxStatusRequest { tx_hash };
-
-        let url = format!("{}/tx/status", self.base_url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let result: TxStatus = response.json().await?;
-        Ok(result)
+        self.post_json("/tx/status", &GetTxStatusRequest { tx_hash }).await
     }
 
-    /// Get balance
     pub async fn get_balance(
         &self,
         address: alloy_primitives::Address,
         asset_id: u32,
     ) -> Result<GetBalanceResponse> {
-        let request = GetBalanceRequest { address, asset_id };
-
-        let url = format!("{}/account/balance", self.base_url);
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let result: GetBalanceResponse = response.json().await?;
-        Ok(result)
+        self.post_json("/account/balance", &GetBalanceRequest { address, asset_id }).await
     }
 
-    /// Health check
     pub async fn health(&self) -> Result<String> {
-        let url = format!("{}/health", self.base_url);
-        let response = self.client.get(&url).send().await?.error_for_status()?;
-        let text = response.text().await?;
-        Ok(text)
+        Ok(self
+            .client
+            .get(format!("{}/health", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?)
     }
 }
 
-// Request/Response types
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubmitTxRequest {
-    pub tx: String,
+struct SubmitTxRequest {
+    tx: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,13 +87,11 @@ pub struct SubmitTxResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct GetTxStatusRequest {
-    pub tx_hash: B256,
+struct GetTxStatusRequest {
+    tx_hash: B256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct TxStatus {
     pub tx_hash: B256,
     pub status: String,
@@ -119,9 +100,9 @@ pub struct TxStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetBalanceRequest {
-    pub address: alloy_primitives::Address,
-    pub asset_id: u32,
+struct GetBalanceRequest {
+    address: alloy_primitives::Address,
+    asset_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

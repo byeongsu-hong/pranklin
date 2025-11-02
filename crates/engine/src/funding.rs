@@ -1,25 +1,25 @@
-use crate::EngineError;
+use crate::{
+    constants::{BASIS_POINTS, DEFAULT_MAX_FUNDING_RATE_BPS},
+    EngineError,
+};
 use pranklin_state::{FundingRate, StateManager};
 
-// Constants
-const BASIS_POINTS: u128 = 10000;
-const DEFAULT_MAX_FUNDING_RATE_BPS: u32 = 1000; // 10% per interval
-
 /// Funding rate calculator for perpetual futures
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FundingRateCalculator {
     /// Maximum funding rate (in basis points per interval)
     max_funding_rate_bps: u32,
 }
 
-impl FundingRateCalculator {
-    /// Create a new funding rate calculator with default settings
-    pub fn new() -> Self {
+impl Default for FundingRateCalculator {
+    fn default() -> Self {
         Self {
             max_funding_rate_bps: DEFAULT_MAX_FUNDING_RATE_BPS,
         }
     }
+}
 
+impl FundingRateCalculator {
     /// Calculate funding rate based on mark price and oracle price
     /// Returns the funding rate in basis points (positive = longs pay shorts, negative = shorts pay longs)
     pub fn calculate_funding_rate(
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_calculate_funding_rate() {
-        let calc = FundingRateCalculator::new();
+        let calc = FundingRateCalculator::default();
 
         // Mark price > Oracle price (longs pay shorts)
         let mark_price = 51000;
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_funding_payment() {
-        let calc = FundingRateCalculator::new();
+        let calc = FundingRateCalculator::default();
 
         let position_size = 100;
         let entry_index = 1000;

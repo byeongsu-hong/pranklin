@@ -43,20 +43,15 @@ pub struct ErrorResponse {
 impl IntoResponse for RpcError {
     fn into_response(self) -> Response {
         let (status, error_message) = match self {
-            RpcError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            RpcError::AuthError(msg) => (StatusCode::UNAUTHORIZED, msg),
-            RpcError::MempoolError(msg) => (StatusCode::BAD_REQUEST, msg),
-            RpcError::StateError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            RpcError::EngineError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            RpcError::ServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            RpcError::NotFound => (StatusCode::NOT_FOUND, "Not found".to_string()),
-            RpcError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::InvalidRequest(msg) | Self::MempoolError(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::AuthError(msg) => (StatusCode::UNAUTHORIZED, msg),
+            Self::NotFound => (StatusCode::NOT_FOUND, "Not found".to_string()),
+            Self::StateError(msg) 
+            | Self::EngineError(msg) 
+            | Self::ServerError(msg) 
+            | Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
-        let body = Json(ErrorResponse {
-            error: error_message,
-        });
-
-        (status, body).into_response()
+        (status, Json(ErrorResponse { error: error_message })).into_response()
     }
 }

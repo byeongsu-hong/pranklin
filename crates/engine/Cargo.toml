@@ -6,14 +6,19 @@ name              = "pranklin-engine"
 version.workspace = true
 
 [dependencies]
-alloy-primitives.workspace = true
-serde.workspace            = true
-serde_json.workspace       = true
-thiserror.workspace        = true
-tokio.workspace            = true
+alloy-primitives     = { workspace = true, features = ["borsh"] }
+borsh.workspace      = true
+hex.workspace        = true
+num_cpus.workspace   = true
+rocksdb.workspace    = true
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+tokio.workspace      = true
 
 pranklin-state.workspace = true
 pranklin-tx.workspace    = true
+pranklin-types.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -28,3 +33,7 @@ name    = "orderbook_benchmark"
 [[bench]]
 harness = false
 name    = "engine_throughput_benchmark"
+
+[[bench]]
+harness = false
+name    = "parallel_execution_benchmark"

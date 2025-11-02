@@ -5,10 +5,12 @@ members = [
     "crates/engine",
     "crates/exec",
     "crates/loadtest",
+    "crates/macros",
     "crates/mempool",
     "crates/rpc",
     "crates/state",
     "crates/tx",
+    "crates/types",
 ]
 resolver = "2"
 
@@ -102,7 +104,9 @@ pranklin-auth     = { path = "./crates/auth" }
 pranklin-engine   = { path = "./crates/engine" }
 pranklin-exec     = { path = "./crates/exec" }
 pranklin-loadtest = { path = "./crates/loadtest" }
+pranklin-macros   = { path = "./crates/macros" }
 pranklin-mempool  = { path = "./crates/mempool" }
 pranklin-rpc      = { path = "./crates/rpc" }
 pranklin-state    = { path = "./crates/state" }
 pranklin-tx       = { path = "./crates/tx" }
+pranklin-types    = { path = "./crates/types" }
