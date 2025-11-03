@@ -34,14 +34,13 @@ where
     F: Fn(&mut T) -> &mut http::HeaderMap,
 {
     let headers = get_headers(&mut msg);
-    if let Some(content_type) = headers.get("content-type") {
-        if let Ok(ct_str) = content_type.to_str() {
-            if ct_str.contains(from_type) {
-                tracing::debug!("{}", log_msg);
-                if let Ok(header_value) = http::HeaderValue::from_str(&to_type) {
-                    headers.insert("content-type", header_value);
-                }
-            }
+    if let Some(content_type) = headers.get("content-type")
+        && let Ok(ct_str) = content_type.to_str()
+        && ct_str.contains(from_type)
+    {
+        tracing::debug!("{}", log_msg);
+        if let Ok(header_value) = http::HeaderValue::from_str(&to_type) {
+            headers.insert("content-type", header_value);
         }
     }
     msg
