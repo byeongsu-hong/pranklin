@@ -1,4 +1,5 @@
 use alloy_primitives::Address;
+use pranklin_exec::{PranklinExecutorService, pb::executor_service_server::ExecutorServiceServer};
 use tonic::transport::Server;
 use tower::ServiceBuilder;
 use tracing_subscriber::EnvFilter;
@@ -26,7 +27,7 @@ fn convert_content_type<T, F>(
     mut msg: T,
     get_headers: F,
     from_type: &str,
-    to_type: &str,
+    to_type: String,
     log_msg: &str,
 ) -> T
 where
@@ -37,7 +38,9 @@ where
         if let Ok(ct_str) = content_type.to_str() {
             if ct_str.contains(from_type) {
                 tracing::debug!("{}", log_msg);
-                headers.insert("content-type", http::HeaderValue::from_static(to_type));
+                if let Ok(header_value) = http::HeaderValue::from_str(&to_type) {
+                    headers.insert("content-type", header_value);
+                }
             }
         }
     }
@@ -50,7 +53,7 @@ fn convert_connect_to_grpc<T>(req: http::Request<T>) -> http::Request<T> {
         req,
         |r| r.headers_mut(),
         "application/proto",
-        "application/grpc",
+        "application/grpc".to_string(),
         "Request: Connect-RPC → gRPC",
     )
 }
@@ -61,7 +64,7 @@ fn convert_grpc_to_connect<T>(res: http::Response<T>) -> http::Response<T> {
         res,
         |r| r.headers_mut(),
         "application/grpc",
-        "application/proto",
+        "application/proto".to_string(),
         "Response: gRPC → Connect-RPC",
     )
 }
@@ -82,7 +85,7 @@ pub fn init_tracing(debug: bool) {
 /// Start Pranklin daemon
 pub async fn start_server(config: &StartConfig) -> anyhow::Result<()> {
     log_startup_info(config);
-    
+
     let snapshot_config = config.snapshot_exporter_config();
     if let Some(ref cfg) = snapshot_config {
         log_snapshot_config(cfg.auto_export_interval, &cfg.provider);
@@ -109,7 +112,7 @@ fn log_startup_info(config: &StartConfig) {
     tracing::info!("  DB:   {}", config.db_path);
 }
 
-async fn initialize_assets(executor_service: &pranklin_exec::ExecutorService) -> anyhow::Result<()> {
+async fn initialize_assets(executor_service: &PranklinExecutorService) -> anyhow::Result<()> {
     tracing::info!("📦 Initializing default assets...");
     executor_service
         .initialize_assets()
@@ -119,18 +122,20 @@ async fn initialize_assets(executor_service: &pranklin_exec::ExecutorService) ->
 }
 
 async fn initialize_bridge_operators(
-    executor_service: &pranklin_exec::ExecutorService,
+    executor_service: &PranklinExecutorService,
     config: &StartConfig,
 ) -> anyhow::Result<()> {
     if !config.has_bridge_operators() {
-        tracing::warn!("⚠️  No bridge operators configured. Bridge functionality will be disabled.");
+        tracing::warn!(
+            "⚠️  No bridge operators configured. Bridge functionality will be disabled."
+        );
         tracing::warn!("    Use --bridge.operators=<addr1>,<addr2>,... to enable bridge.");
         return Ok(());
     }
 
     tracing::info!("🌉 Initializing bridge operators...");
     let operators = config.parse_bridge_operators()?;
-    
+
     executor_service
         .initialize_bridge_operators(&operators)
         .await
@@ -146,7 +151,7 @@ fn log_operators(operators: &[Address]) {
 }
 
 async fn spawn_servers(
-    grpc_server: pranklin_exec::ExecutorServer,
+    grpc_server: ExecutorServiceServer<PranklinExecutorService>,
     rpc_state: pranklin_rpc::RpcState,
     grpc_addr: &str,
     rpc_addr: &str,
@@ -167,22 +172,23 @@ async fn spawn_servers(
             .await
     });
 
-    let rpc_handle = tokio::spawn(async move { 
-        pranklin_rpc::start_server(rpc_state, &rpc_addr_owned).await 
-    });
+    let rpc_handle =
+        tokio::spawn(async move { pranklin_rpc::start_server(rpc_state, &rpc_addr_owned).await });
 
     tracing::info!("✅ Pranklin daemon started");
     tracing::info!("Press Ctrl+C to stop");
 
-    let handle_result = |name: &str, result: Result<Result<(), _>, _>| match result {
-        Ok(Ok(_)) => tracing::info!("{} server stopped", name),
-        Ok(Err(e)) => tracing::error!("{} server error: {}", name, e),
-        Err(e) => tracing::error!("{} server task error: {}", name, e),
-    };
-
     tokio::select! {
-        result = grpc_handle => handle_result("gRPC", result),
-        result = rpc_handle => handle_result("RPC", result),
+        result = grpc_handle => match result {
+            Ok(Ok(_)) => tracing::info!("gRPC server stopped"),
+            Ok(Err(e)) => tracing::error!("gRPC server error: {}", e),
+            Err(e) => tracing::error!("gRPC server task error: {}", e),
+        },
+        result = rpc_handle => match result {
+            Ok(Ok(_)) => tracing::info!("RPC server stopped"),
+            Ok(Err(e)) => tracing::error!("RPC server error: {}", e),
+            Err(e) => tracing::error!("RPC server task error: {}", e),
+        },
     }
 
     Ok(())

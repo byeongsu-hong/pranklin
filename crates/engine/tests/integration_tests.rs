@@ -54,7 +54,7 @@ fn test_full_trade_flow() {
         .unwrap();
 
     // Trader 1 places a bid
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader1,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -80,7 +80,7 @@ fn test_full_trade_flow() {
     assert!(order.is_some());
 
     // Trader 2 places an ask that matches
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -146,7 +146,7 @@ fn test_partial_fill() {
         .unwrap();
 
     // Trader 1 places a bid for 10
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader1,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -168,7 +168,7 @@ fn test_partial_fill() {
     };
 
     // Trader 2 places ask for 5 (partial fill)
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -220,7 +220,7 @@ fn test_post_only_rejection() {
         .unwrap();
 
     // Trader 1 places a bid
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader1,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -240,7 +240,7 @@ fn test_post_only_rejection() {
     }
 
     // Trader 2 tries to place post-only order that would match
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -288,7 +288,7 @@ fn test_ioc_order() {
         .unwrap();
 
     // Trader 1 places a bid for 5
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader1,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -308,7 +308,7 @@ fn test_ioc_order() {
     }
 
     // Trader 2 places IOC order for 10 (should only fill 5)
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -411,7 +411,7 @@ fn test_order_cancellation() {
         .unwrap();
 
     // Place order
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -436,7 +436,7 @@ fn test_order_cancellation() {
     assert!(engine.state().get_order(order_id).unwrap().is_some());
 
     // Cancel order
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         2,
         trader,
         TxPayload::CancelOrder(CancelOrderTx { order_id }),
@@ -484,7 +484,7 @@ fn test_reduce_only_order() {
         .unwrap();
 
     // Try to place reduce-only order on the wrong side (buy instead of sell)
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -512,7 +512,7 @@ fn test_reduce_only_order() {
     ));
 
     // Place valid reduce-only order (sell to reduce long)
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         2,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -546,7 +546,7 @@ fn test_tick_validation() {
         .unwrap();
 
     // Test 1: Valid price on tick boundary (multiple of 1000)
-    let tx_valid = Transaction::new(
+    let tx_valid = Transaction::new_raw(
         1,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -567,7 +567,7 @@ fn test_tick_validation() {
     }
 
     // Test 2: Invalid price NOT on tick boundary
-    let tx_invalid = Transaction::new(
+    let tx_invalid = Transaction::new_raw(
         2,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -592,7 +592,7 @@ fn test_tick_validation() {
     }
 
     // Test 3: Multiple valid tick prices
-    let tx_valid2 = Transaction::new(
+    let tx_valid2 = Transaction::new_raw(
         3,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -613,7 +613,7 @@ fn test_tick_validation() {
     }
 
     // Test 4: Another invalid price
-    let tx_invalid2 = Transaction::new(
+    let tx_invalid2 = Transaction::new_raw(
         4,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -684,7 +684,7 @@ fn test_complete_trading_flow_with_deposit_withdraw() {
 
     // Trader 1 places multiple orders
     for i in 0..3 {
-        let tx = Transaction::new(
+        let tx = Transaction::new_raw(
             i + 1,
             trader1,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -705,7 +705,7 @@ fn test_complete_trading_flow_with_deposit_withdraw() {
     }
 
     // Trader 2 places matching sell order (larger size for liquidity)
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -743,7 +743,7 @@ fn test_complete_trading_flow_with_deposit_withdraw() {
 
     // Trader 2 needs to provide buy liquidity for trader 1 to close their long position
     // Place buy limit order on the opposite side
-    let tx_buy = Transaction::new(
+    let tx_buy = Transaction::new_raw(
         2,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -763,7 +763,7 @@ fn test_complete_trading_flow_with_deposit_withdraw() {
     }
 
     // Close position for trader 1
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         10,
         trader1,
         TxPayload::ClosePosition(ClosePositionTx {
@@ -821,7 +821,7 @@ fn test_multi_market_trading() {
         .unwrap();
 
     // Place order in BTC market
-    let tx_btc = Transaction::new(
+    let tx_btc = Transaction::new_raw(
         1,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -841,7 +841,7 @@ fn test_multi_market_trading() {
     }
 
     // Place order in ETH market
-    let tx_eth = Transaction::new(
+    let tx_eth = Transaction::new_raw(
         2,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -899,7 +899,7 @@ fn test_transfer_between_accounts() {
         .unwrap();
 
     // Execute transfer
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         1,
         sender,
         TxPayload::Transfer(TransferTx {
@@ -952,7 +952,7 @@ fn test_position_modification() {
     // TODO: Modify position to add margin (ModifyPosition not yet implemented)
     // Skip this test until ModifyPosition is implemented
     /*
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         1,
         trader,
         TxPayload::ModifyPosition(ModifyPositionTx {
@@ -995,7 +995,7 @@ fn test_fok_order_execution() {
         .unwrap();
 
     // Trader 1 places partial liquidity
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         1,
         trader1,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -1015,7 +1015,7 @@ fn test_fok_order_execution() {
     }
 
     // Trader 2 places FOK order for larger size (should fail)
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader2,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -1059,7 +1059,7 @@ fn test_event_emission() {
     let tx_hash = B256::from([1u8; 32]);
 
     // Place order and collect events
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         1,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {

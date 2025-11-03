@@ -115,13 +115,19 @@ impl From<&SnapshotConfig> for pranklin_state::CloudProvider {
             .s3_bucket
             .as_ref()
             .map(|bucket| {
-                CloudProvider::S3(S3Config::new(bucket, &config.s3_region, &config.s3_prefix))
+                CloudProvider::S3(S3Config {
+                    bucket: bucket.clone(),
+                    region: config.s3_region.clone(),
+                    prefix: config.s3_prefix.clone(),
+                })
             })
             .or_else(|| {
-                config
-                    .gcs_bucket
-                    .as_ref()
-                    .map(|bucket| CloudProvider::GCS(GCSConfig::new(bucket, &config.gcs_prefix)))
+                config.gcs_bucket.as_ref().map(|bucket| {
+                    CloudProvider::GCS(GCSConfig {
+                        bucket: bucket.clone(),
+                        prefix: config.gcs_prefix.clone(),
+                    })
+                })
             })
             .unwrap_or_else(|| CloudProvider::Local {
                 path: config.local_path.as_str().into(),

@@ -8,7 +8,7 @@ fn test_partial_liquidation() {
     // Setup
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
 
     // Create market
     let market_id = 0;
@@ -87,7 +87,7 @@ fn test_insurance_fund_usage() {
     // Setup
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
 
     // Create market
     let market_id = 0;
@@ -159,7 +159,7 @@ fn test_risk_index_rebuild() {
     // Setup
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
 
     // Create market
     let market_id = 0;
@@ -213,7 +213,7 @@ fn test_adl_candidate_finding() {
     // Setup
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
-    let _liquidation = LiquidationEngine::new();
+    let _liquidation = LiquidationEngine::default();
 
     // Create market
     let market_id = 0;
@@ -424,7 +424,7 @@ fn test_batch_liquidation() {
 fn test_edge_case_zero_size_position() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
 
     let market_id = 0;
     let market = Market {
@@ -471,7 +471,7 @@ fn test_edge_case_zero_size_position() {
 
 #[test]
 fn test_fee_split_configuration() {
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
 
     // Default is 50/50
     assert_eq!(liquidation.get_fee_split(), (5000, 5000));
@@ -486,7 +486,7 @@ fn test_fee_split_configuration() {
 #[test]
 #[should_panic(expected = "Fee split must sum to 10000 bps")]
 fn test_invalid_fee_split() {
-    let mut liquidation = LiquidationEngine::new();
+    let mut liquidation = LiquidationEngine::default();
     // Should panic - doesn't sum to 10000
     liquidation.set_fee_split(6000, 3000);
 }

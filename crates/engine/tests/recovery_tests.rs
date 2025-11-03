@@ -51,7 +51,7 @@ fn test_orderbook_rebuild_after_restart() {
             .unwrap();
 
         // Place bid
-        let tx1 = Transaction::new(
+        let tx1 = Transaction::new_raw(
             0,
             trader1,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -73,7 +73,7 @@ fn test_orderbook_rebuild_after_restart() {
         };
 
         // Place ask
-        let tx2 = Transaction::new(
+        let tx2 = Transaction::new_raw(
             0,
             trader2,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -289,7 +289,7 @@ fn test_full_crash_recovery_scenario() {
         }
 
         // Place 2 orders
-        let tx1 = Transaction::new(
+        let tx1 = Transaction::new_raw(
             0,
             trader1,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -310,7 +310,7 @@ fn test_full_crash_recovery_scenario() {
             panic!();
         };
 
-        let tx2 = Transaction::new(
+        let tx2 = Transaction::new_raw(
             0,
             trader2,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -399,7 +399,7 @@ fn test_full_crash_recovery_scenario() {
         println!("  - Markets: 1 market discovered");
 
         // Phase 3: Continue trading after recovery
-        let tx3 = Transaction::new(
+        let tx3 = Transaction::new_raw(
             1, // nonce = 1 (trader1's second tx)
             trader1,
             TxPayload::PlaceOrder(PlaceOrderTx {
@@ -454,7 +454,7 @@ fn test_recovery_with_multiple_markets() {
             .unwrap();
 
         for market_id in [0, 1, 2] {
-            let tx = Transaction::new(
+            let tx = Transaction::new_raw(
                 market_id as u64,
                 trader,
                 TxPayload::PlaceOrder(PlaceOrderTx {

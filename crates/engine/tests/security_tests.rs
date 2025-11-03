@@ -63,7 +63,7 @@ fn test_maximum_order_size_validation() {
         .unwrap();
 
     // Try to place order exceeding max size
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         0,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -111,7 +111,7 @@ fn test_minimum_order_size_validation() {
         .unwrap();
 
     // Try to place order below minimum
-    let tx = Transaction::new(
+    let tx = Transaction::new_raw(
         0,
         trader,
         TxPayload::PlaceOrder(PlaceOrderTx {
@@ -154,7 +154,7 @@ fn test_agent_cannot_modify_agents() {
 
     // Create a transaction where agent tries to add another agent
     // This should be caught in tx_executor.rs by checking signer != tx.from
-    let _tx = Transaction::new(
+    let _tx = Transaction::new_raw(
         0,
         owner, // tx.from = owner (but signed by agent)
         TxPayload::SetAgent(SetAgentTx {
@@ -193,7 +193,7 @@ fn test_nonce_handling_after_failed_transaction() {
     assert_eq!(nonce, 0);
 
     // Transaction with nonce=0 should work
-    let tx1 = Transaction::new(
+    let tx1 = Transaction::new_raw(
         0,
         trader,
         TxPayload::Deposit(DepositTx {
@@ -214,7 +214,7 @@ fn test_nonce_handling_after_failed_transaction() {
 
     // If a transaction with nonce=1 fails BEFORE execution, nonce stays at 1
     // Next transaction with nonce=1 should be accepted
-    let tx2 = Transaction::new(
+    let tx2 = Transaction::new_raw(
         1,
         trader,
         TxPayload::Withdraw(WithdrawTx {
@@ -235,7 +235,7 @@ fn test_nonce_handling_after_failed_transaction() {
     assert_eq!(nonce, 1);
 
     // Can retry with same nonce
-    let tx3 = Transaction::new(
+    let tx3 = Transaction::new_raw(
         1,
         trader,
         TxPayload::Deposit(DepositTx {

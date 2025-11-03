@@ -9,7 +9,7 @@ struct AssetConfig {
     symbol: &'static str,
     name: &'static str,
     decimals: u8,
-    collateral_weight_bps: u16,
+    collateral_weight_bps: u32,
 }
 
 impl From<AssetConfig> for Asset {
@@ -82,7 +82,7 @@ pub fn initialize_bridge_operators(state: &mut StateManager, operators: &[Addres
     operators
         .iter()
         .enumerate()
-        .try_for_each(|(i, &operator)| {
+        .try_for_each(|(i, &operator)| -> Result<()> {
             state.set_bridge_operator(operator, true)?;
             tracing::info!("  ✓ Operator {}: {:?}", i + 1, operator);
             Ok(())
