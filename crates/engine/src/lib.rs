@@ -1,4 +1,3 @@
-mod block_stm;
 mod constants;
 mod error;
 mod event_store;
@@ -10,7 +9,6 @@ mod position;
 mod risk;
 mod services;
 
-pub use block_stm::*;
 pub use error::*;
 pub use event_store::*;
 pub use events::*;
@@ -20,6 +18,9 @@ pub use orderbook::*;
 pub use position::*;
 pub use risk::{MarginMode, RiskEngine};
 pub use services::*;
+
+/// Type alias for orderbook depth (bids, asks)
+pub type OrderbookDepth = (Vec<(u64, u64)>, Vec<(u64, u64)>);
 
 use pranklin_state::StateManager;
 use pranklin_tx::Address;
@@ -63,12 +64,12 @@ impl Engine {
     pub fn new(state: StateManager) -> Self {
         Self {
             state,
-            account_service: AccountService::default(),
-            order_service: OrderService::default(),
-            position_service: PositionService::default(),
-            agent_service: AgentService::default(),
+            account_service: AccountService,
+            order_service: OrderService,
+            position_service: PositionService,
+            agent_service: AgentService,
             orderbook: OrderbookManager::default(),
-            position_mgr: PositionManager::default(),
+            position_mgr: PositionManager,
             liquidation: LiquidationEngine::default(),
             funding: FundingRateCalculator::default(),
             risk: RiskEngine::default(),
@@ -261,11 +262,7 @@ impl Engine {
     }
 
     /// Get orderbook depth
-    pub fn get_orderbook_depth(
-        &self,
-        market_id: u32,
-        depth: usize,
-    ) -> (Vec<(u64, u64)>, Vec<(u64, u64)>) {
+    pub fn get_orderbook_depth(&self, market_id: u32, depth: usize) -> OrderbookDepth {
         self.orderbook.get_depth(market_id, depth)
     }
 

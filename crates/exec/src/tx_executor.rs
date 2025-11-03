@@ -1,5 +1,4 @@
 use crate::error::{Result, TxExecutionError};
-use alloy_primitives::Address;
 use pranklin_auth::AuthService;
 use pranklin_engine::Engine;
 use pranklin_mempool::Mempool;
@@ -77,7 +76,10 @@ impl<'a> TransactionExecutor<'a> {
         tx_bytes_list.iter().enumerate().fold(
             TxExecutionStats::default(),
             |mut stats, (idx, tx_bytes)| {
-                match Transaction::decode(tx_bytes).map_err(Into::into).and_then(|tx| self.execute(&tx)) {
+                match Transaction::decode(tx_bytes)
+                    .map_err(Into::into)
+                    .and_then(|tx| self.execute(&tx))
+                {
                     Ok(()) => stats.record_success(),
                     Err(e) => {
                         stats.record_failure();

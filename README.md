@@ -6,7 +6,6 @@ A high-performance perpetual futures trading engine built in Rust, designed for 
 
 - **330K+ TPS**: Peak transaction throughput with order matching
 - **Sub-microsecond** state operations (386ns balance reads/writes)
-- **Parallel execution** with Block-STM optimistic concurrency
 - **Efficient matching**: 1.2ms to match 100 orders
 
 ## 🏗️ Architecture
@@ -21,7 +20,7 @@ graph TB
 
     subgraph Execution["⚡ Execution Layer"]
         Mempool[Transaction Mempool<br/>Nonce Ordering]
-        Executor[TX Executor<br/>Block-STM]
+        Executor[TX Executor]
     end
 
     subgraph Engine["🎯 Engine Layer"]
@@ -175,7 +174,6 @@ cargo run --release -- \
 
 - **EIP-712 signatures** for transaction authentication
 - **Nonce-based ordering** in mempool
-- **Parallel execution** with Block-STM
 - **Agent system** for delegated trading
 
 ### API

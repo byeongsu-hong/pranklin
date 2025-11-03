@@ -377,7 +377,7 @@ impl EventStore for RocksDbEventStore {
             let event_idx = parts[2];
 
             // Scan events with this tx_hash
-            let event_prefix = format!("event:");
+            let event_prefix = "event:".to_string();
             let event_iter = self.db.prefix_iterator(event_prefix.as_bytes());
 
             for event_item in event_iter {

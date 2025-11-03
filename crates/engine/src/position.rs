@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_calculate_pnl() {
-        let mgr = PositionManager::default();
+        let mgr = PositionManager;
 
         let position = Position {
             size: 100,

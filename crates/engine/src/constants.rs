@@ -1,5 +1,4 @@
 /// Common constants used across the engine
-
 /// Basis points constant (10000 = 100%)
 pub(crate) const BASIS_POINTS: u128 = 10000;
 
@@ -20,4 +19,3 @@ pub(crate) const MIN_LIQUIDATION_PCT: u64 = 10;
 
 /// Default maximum funding rate in basis points per interval (10%)
 pub(crate) const DEFAULT_MAX_FUNDING_RATE_BPS: u32 = 1000;
-

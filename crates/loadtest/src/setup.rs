@@ -97,10 +97,10 @@ impl AccountSetup {
 
         let mut verified = 0;
         for wallet in wallets.iter().take(10) {
-            if let Ok(response) = self.client.get_balance(wallet.address(), asset_id).await {
-                if response.balance >= expected_amount {
-                    verified += 1;
-                }
+            if let Ok(response) = self.client.get_balance(wallet.address(), asset_id).await
+                && response.balance >= expected_amount
+            {
+                verified += 1;
             }
         }
 

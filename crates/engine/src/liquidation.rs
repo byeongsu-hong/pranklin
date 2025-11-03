@@ -1,9 +1,9 @@
 use crate::{
+    EngineError, PositionManager,
     constants::{
         BASIS_POINTS, DEFAULT_INSURANCE_FEE_BPS, DEFAULT_LIQUIDATOR_FEE_BPS,
         DEFAULT_MIN_INSURANCE_RATIO_BPS, MARGIN_BUFFER_BPS, MIN_LIQUIDATION_PCT,
     },
-    EngineError, PositionManager,
 };
 use alloy_primitives::Address;
 use pranklin_state::{Market, Position, StateManager};
@@ -93,7 +93,7 @@ pub struct LiquidationEngine {
 impl Default for LiquidationEngine {
     fn default() -> Self {
         Self {
-            position_mgr: PositionManager::default(),
+            position_mgr: PositionManager,
             at_risk_positions: HashMap::new(),
             insurance_funds: HashMap::new(),
             fee_split: (DEFAULT_LIQUIDATOR_FEE_BPS, DEFAULT_INSURANCE_FEE_BPS),

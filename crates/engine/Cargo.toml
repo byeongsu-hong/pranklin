@@ -33,7 +33,3 @@ name    = "orderbook_benchmark"
 [[bench]]
 harness = false
 name    = "engine_throughput_benchmark"
-
-[[bench]]
-harness = false
-name    = "parallel_execution_benchmark"

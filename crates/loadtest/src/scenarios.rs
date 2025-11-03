@@ -109,7 +109,7 @@ pub async fn run_order_matching_scenario(
         })
     };
 
-    let mut handles: Vec<_> = (0..num_buyers)
+    let handles: Vec<_> = (0..num_buyers)
         .map(|id| spawn_trader(true, id))
         .chain((0..num_sellers).map(|id| spawn_trader(false, num_buyers + id)))
         .collect();

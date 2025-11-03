@@ -586,7 +586,7 @@ impl Eip712DataEncoder {
 }
 
 // ============================================================================
-// StateAccess Implementation for Block-STM
+// StateAccess Implementation
 // ============================================================================
 
 // Helper functions for common access patterns
@@ -677,7 +677,6 @@ impl pranklin_state::DeclareStateAccess for Transaction {
                     pranklin_state::AccessMode::Write,
                 ));
                 // Note: We don't know the market_id without reading the order first
-                // This is a limitation - Block-STM will need to handle dynamic accesses
             }
             TxPayload::ModifyOrder(m) => {
                 accesses.push((

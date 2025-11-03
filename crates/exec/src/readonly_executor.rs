@@ -173,7 +173,6 @@ impl ReadOnlyExecutor {
     }
 
     /// Query methods below (read-only access)
-
     /// Get balance for an address
     pub async fn get_balance(
         &self,

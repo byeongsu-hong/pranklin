@@ -1,10 +1,9 @@
 use pranklin_macros::standard;
 use pranklin_types::Address;
 
-/// State access pattern for Block-STM parallel execution
+/// State access pattern for transaction execution
 ///
-/// This enum declares which state keys a transaction will access,
-/// enabling conflict detection and parallel scheduling.
+/// This enum declares which state keys a transaction will access.
 #[standard]
 #[derive(Hash, Copy)]
 pub enum StateAccess {
@@ -49,8 +48,8 @@ pub enum AccessMode {
 
 /// Trait for declaring state accesses before execution
 ///
-/// Implementing this trait allows the Block-STM scheduler to analyze
-/// transaction dependencies and execute non-conflicting transactions in parallel.
+/// Implementing this trait allows transactions to declare which state
+/// keys they will access during execution.
 pub trait DeclareStateAccess {
     /// Declare all state accesses this transaction will make
     ///

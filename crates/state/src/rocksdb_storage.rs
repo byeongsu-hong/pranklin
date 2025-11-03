@@ -505,16 +505,17 @@ impl RocksDbStorage {
     /// - Restore to specific backup point
     #[cfg(feature = "backup-engine")]
     pub fn create_backup<P: AsRef<Path>>(&self, backup_path: P) -> Result<(), StateError> {
+        use rocksdb::Env;
         use rocksdb::backup::{BackupEngine, BackupEngineOptions};
 
-        let mut backup_opts = BackupEngineOptions::new(backup_path.as_ref()).map_err(|e| {
+        let backup_opts = BackupEngineOptions::new(backup_path.as_ref()).map_err(|e| {
             StateError::StorageError(format!("Failed to create backup options: {}", e))
         })?;
 
-        // Enable incremental backups (only changed files)
-        backup_opts.set_share_table_files(true);
+        let env = Env::new()
+            .map_err(|e| StateError::StorageError(format!("Failed to create env: {}", e)))?;
 
-        let mut backup_engine = BackupEngine::open(&backup_opts, &*self.db).map_err(|e| {
+        let mut backup_engine = BackupEngine::open(&backup_opts, &env).map_err(|e| {
             StateError::StorageError(format!("Failed to open backup engine: {}", e))
         })?;
 
@@ -537,14 +538,17 @@ impl RocksDbStorage {
         restore_path: Q,
         backup_id: u32,
     ) -> Result<(), StateError> {
+        use rocksdb::Env;
         use rocksdb::backup::{BackupEngine, BackupEngineOptions, RestoreOptions};
 
         let backup_opts = BackupEngineOptions::new(backup_path.as_ref()).map_err(|e| {
             StateError::StorageError(format!("Failed to create backup options: {}", e))
         })?;
 
-        let backup_engine = BackupEngine::open(&backup_opts, &DB::open_default("dummy").unwrap())
-            .map_err(|e| {
+        let env = Env::new()
+            .map_err(|e| StateError::StorageError(format!("Failed to create env: {}", e)))?;
+
+        let mut backup_engine = BackupEngine::open(&backup_opts, &env).map_err(|e| {
             StateError::StorageError(format!("Failed to open backup engine: {}", e))
         })?;
 

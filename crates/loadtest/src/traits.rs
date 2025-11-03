@@ -2,12 +2,9 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 /// Extension trait for spawning workers
+#[allow(dead_code)]
 pub trait WorkerSpawner: Sized + Clone + Send + 'static {
-    fn spawn_workers<F>(
-        self,
-        num_workers: usize,
-        worker_fn: F,
-    ) -> Vec<JoinHandle<()>>
+    fn spawn_workers<F>(self, num_workers: usize, worker_fn: F) -> Vec<JoinHandle<()>>
     where
         F: Fn(Self) + Send + Clone + 'static,
     {
@@ -24,6 +21,7 @@ pub trait WorkerSpawner: Sized + Clone + Send + 'static {
 impl<T: Clone + Send + 'static> WorkerSpawner for T {}
 
 /// Extension trait for Duration
+#[allow(dead_code)]
 pub trait DurationExt {
     fn has_elapsed_since(&self, start: std::time::Instant) -> bool;
 }
@@ -35,6 +33,7 @@ impl DurationExt for Duration {
 }
 
 /// Extension trait for random range generation
+#[allow(dead_code)]
 pub trait RandomRange {
     type Output;
     fn random_in_range(min: Self::Output, max: Self::Output) -> Self::Output;
@@ -53,4 +52,3 @@ impl RandomRange for u128 {
         fastrand::u128(min..max)
     }
 }
-

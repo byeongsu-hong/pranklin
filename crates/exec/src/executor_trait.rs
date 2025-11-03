@@ -7,7 +7,6 @@ use pranklin_types::TxReceipt;
 ///
 /// This trait abstracts different execution strategies:
 /// - Sequential: Execute transactions one by one (current implementation)
-/// - Parallel: Execute independent transactions concurrently (Block-STM)
 /// - Validation-only: Verify transactions without state changes
 ///
 /// This enables flexibility in choosing execution strategy based on:
@@ -103,43 +102,13 @@ impl ExecutionStats {
 }
 
 /// Execution mode for different strategies
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExecutionMode {
     /// Sequential execution (current)
+    #[default]
     Sequential,
-    /// Parallel execution with Block-STM
-    Parallel {
-        /// Number of worker threads
-        workers: usize,
-        /// Enable optimistic execution
-        optimistic: bool,
-    },
     /// Validation-only (no state changes)
     ValidationOnly,
-}
-
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        ExecutionMode::Sequential
-    }
-}
-
-impl ExecutionMode {
-    /// Create parallel mode with default settings
-    pub const fn parallel(workers: usize) -> Self {
-        Self::Parallel {
-            workers,
-            optimistic: false,
-        }
-    }
-
-    /// Create optimistic parallel mode
-    pub const fn parallel_optimistic(workers: usize) -> Self {
-        Self::Parallel {
-            workers,
-            optimistic: true,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -179,29 +148,5 @@ mod tests {
     fn test_execution_mode() {
         let seq = ExecutionMode::default();
         assert_eq!(seq, ExecutionMode::Sequential);
-
-        let par = ExecutionMode::parallel(8);
-        if let ExecutionMode::Parallel {
-            workers,
-            optimistic,
-        } = par
-        {
-            assert_eq!(workers, 8);
-            assert!(!optimistic);
-        } else {
-            panic!("Expected parallel mode");
-        }
-
-        let opt = ExecutionMode::parallel_optimistic(16);
-        if let ExecutionMode::Parallel {
-            workers,
-            optimistic,
-        } = opt
-        {
-            assert_eq!(workers, 16);
-            assert!(optimistic);
-        } else {
-            panic!("Expected optimistic parallel mode");
-        }
     }
 }
