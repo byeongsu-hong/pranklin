@@ -3,6 +3,7 @@ mod error;
 mod index_manager;
 mod rocksdb_storage;
 mod snapshot_exporter;
+mod storage_key;
 mod types;
 
 pub use access::*;
@@ -10,6 +11,7 @@ pub use error::*;
 pub use index_manager::*;
 pub use rocksdb_storage::*;
 pub use snapshot_exporter::*;
+pub use storage_key::*;
 pub use types::*;
 
 use alloy_primitives::Address;

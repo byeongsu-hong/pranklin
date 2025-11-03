@@ -1,4 +1,4 @@
-use crate::{DomainEvent, Event};
+use crate::{DomainEvent, Event, EventStoreKey};
 use alloy_primitives::{Address, B256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -187,11 +187,11 @@ impl EventStore for InMemoryEventStore {
 /// - Efficient indexing by block height and transaction hash
 /// - Batched writes for performance
 ///
-/// # Key Layout
-/// - `event:{block_height}:{tx_hash}:{event_index}` -> DomainEvent (Borsh serialized)
-/// - `block_idx:{block_height}:{tx_hash}:{event_index}` -> empty (index)
-/// - `tx_idx:{tx_hash}:{event_index}` -> empty (index)
-/// - `meta:count` -> u64 (total event count)
+/// # Key Layout (using EventStoreKey enum with borsh serialization)
+/// - `EventStoreKey::Event { block_height, tx_hash, event_index }` -> DomainEvent (Borsh serialized)
+/// - `EventStoreKey::BlockIndex { block_height, tx_hash, event_index }` -> empty (index)
+/// - `EventStoreKey::TxIndex { tx_hash, event_index }` -> empty (index)
+/// - `EventStoreKey::MetaCount` -> u64 (total event count)
 ///
 pub struct RocksDbEventStore {
     db: Arc<rocksdb::DB>,
@@ -229,6 +229,7 @@ impl RocksDbEventStore {
             return Ok(());
         }
 
+        let buffer_len = self.write_buffer.len();
         let mut batch = rocksdb::WriteBatch::default();
 
         for event in self.write_buffer.drain(..) {
@@ -236,36 +237,36 @@ impl RocksDbEventStore {
             let value = borsh::to_vec(&event)
                 .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
 
-            // Primary key: event:{block}:{tx}:{idx}
-            let event_key = format!(
-                "event:{}:{}:{}",
-                event.block_height,
-                hex::encode(event.tx_hash),
-                event.event_index
-            );
-            batch.put(event_key.as_bytes(), &value);
+            // Primary key: Event { block_height, tx_hash, event_index }
+            let event_key = EventStoreKey::Event {
+                block_height: event.block_height,
+                tx_hash: event.tx_hash,
+                event_index: event.event_index,
+            }
+            .to_bytes();
+            batch.put(event_key, value);
 
-            // Block index: block_idx:{block}:{tx}:{idx}
-            let block_idx_key = format!(
-                "block_idx:{}:{}:{}",
-                event.block_height,
-                hex::encode(event.tx_hash),
-                event.event_index
-            );
-            batch.put(block_idx_key.as_bytes(), b"");
+            // Block index: BlockIndex { block_height, tx_hash, event_index }
+            let block_idx_key = EventStoreKey::BlockIndex {
+                block_height: event.block_height,
+                tx_hash: event.tx_hash,
+                event_index: event.event_index,
+            }
+            .to_bytes();
+            batch.put(block_idx_key, b"");
 
-            // TX index: tx_idx:{tx}:{idx}
-            let tx_idx_key = format!(
-                "tx_idx:{}:{}",
-                hex::encode(event.tx_hash),
-                event.event_index
-            );
-            batch.put(tx_idx_key.as_bytes(), b"");
+            // TX index: TxIndex { tx_hash, event_index }
+            let tx_idx_key = EventStoreKey::TxIndex {
+                tx_hash: event.tx_hash,
+                event_index: event.event_index,
+            }
+            .to_bytes();
+            batch.put(tx_idx_key, b"");
         }
 
         // Increment event count
-        let count = self.count()? + self.write_buffer.len() as u64;
-        batch.put(b"meta:count", count.to_le_bytes());
+        let count = self.count()? + buffer_len as u64;
+        batch.put(EventStoreKey::MetaCount.to_bytes(), count.to_le_bytes());
 
         self.db
             .write(batch)
@@ -300,46 +301,49 @@ impl EventStore for RocksDbEventStore {
         let mut result = Vec::new();
 
         for height in from_height..=to_height {
-            let prefix = format!("block_idx:{}:", height);
-            let iter = self.db.prefix_iterator(prefix.as_bytes());
+            let prefix = EventStoreKey::prefix_for_block(height);
+            let iter = self.db.prefix_iterator(&prefix);
 
             for item in iter {
                 let (key, _) = item.map_err(|e| EventStoreError::RocksDbError(e.to_string()))?;
 
-                // Parse key: block_idx:{block}:{tx}:{idx}
-                let key_str = String::from_utf8_lossy(&key);
+                // Try to deserialize the key
+                let storage_key = match EventStoreKey::from_bytes(&key) {
+                    Ok(k) => k,
+                    Err(_) => break, // Invalid key, stop iteration
+                };
 
-                // Verify it actually matches our prefix (RocksDB prefix_iterator can overmatch)
-                if !key_str.starts_with(&prefix) {
-                    break;
-                }
+                // Verify it's a BlockIndex key with the correct block height
+                match storage_key {
+                    EventStoreKey::BlockIndex {
+                        block_height,
+                        tx_hash,
+                        event_index,
+                    } if block_height == height => {
+                        // Construct event key
+                        let event_key = EventStoreKey::Event {
+                            block_height,
+                            tx_hash,
+                            event_index,
+                        }
+                        .to_bytes();
 
-                let parts: Vec<&str> = key_str.split(':').collect();
-                if parts.len() != 4 {
-                    continue;
-                }
-
-                // Double-check the parsed height matches (prevents "1" matching "10", "100", etc.)
-                if let Ok(parsed_height) = parts[1].parse::<u64>() {
-                    if parsed_height != height {
-                        continue;
+                        // Get event data
+                        if let Some(value) = self
+                            .db
+                            .get(event_key)
+                            .map_err(|e| EventStoreError::RocksDbError(e.to_string()))?
+                        {
+                            let event: DomainEvent = borsh::from_slice(value.as_ref())
+                                .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
+                            result.push(event);
+                        }
                     }
-                } else {
-                    continue;
-                }
-
-                // Construct event key
-                let event_key = format!("event:{}:{}:{}", parts[1], parts[2], parts[3]);
-
-                // Get event data
-                if let Some(value) = self
-                    .db
-                    .get(event_key.as_bytes())
-                    .map_err(|e| EventStoreError::RocksDbError(e.to_string()))?
-                {
-                    let event: DomainEvent = borsh::from_slice(value.as_ref())
-                        .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
-                    result.push(event);
+                    EventStoreKey::BlockIndex { block_height, .. } if block_height != height => {
+                        // Moved past our block height
+                        break;
+                    }
+                    _ => break, // Wrong key type, stop iteration
                 }
             }
         }
@@ -349,52 +353,57 @@ impl EventStore for RocksDbEventStore {
 
     fn get_by_tx(&self, tx_hash: B256) -> Result<Vec<DomainEvent>, EventStoreError> {
         let mut result = Vec::new();
-        let tx_hex = hex::encode(tx_hash);
-        let prefix = format!("tx_idx:{}:", tx_hex);
-        let iter = self.db.prefix_iterator(prefix.as_bytes());
+        let prefix = EventStoreKey::prefix_for_tx(tx_hash);
+        let iter = self.db.prefix_iterator(&prefix);
 
         for item in iter {
             let (key, _) = item.map_err(|e| EventStoreError::RocksDbError(e.to_string()))?;
 
-            let key_str = String::from_utf8_lossy(&key);
-            if !key_str.starts_with(&prefix) {
-                break; // Prefix iteration done
-            }
+            // Try to deserialize the key
+            let storage_key = match EventStoreKey::from_bytes(&key) {
+                Ok(k) => k,
+                Err(_) => break, // Invalid key, stop iteration
+            };
 
-            // Parse key: tx_idx:{tx}:{idx}
-            let parts: Vec<&str> = key_str.split(':').collect();
-            if parts.len() != 3 {
-                continue;
-            }
+            // Verify it's a TxIndex key with the correct tx_hash
+            match storage_key {
+                EventStoreKey::TxIndex {
+                    tx_hash: key_tx_hash,
+                    event_index,
+                } if key_tx_hash == tx_hash => {
+                    // We need to find the event, but we don't know the block_height
+                    // Scan events with this tx_hash
+                    let event_prefix = EventStoreKey::prefix_for_events();
+                    let event_iter = self.db.prefix_iterator(&event_prefix);
 
-            // Verify the tx hash matches exactly
-            if parts[1] != tx_hex {
-                continue;
-            }
+                    for event_item in event_iter {
+                        let (event_key_bytes, event_value) =
+                            event_item.map_err(|e| EventStoreError::RocksDbError(e.to_string()))?;
 
-            // Now find the event by scanning with pattern
-            // We need to find event:{block}:{tx_hex}:{idx}
-            let event_idx = parts[2];
-
-            // Scan events with this tx_hash
-            let event_prefix = "event:".to_string();
-            let event_iter = self.db.prefix_iterator(event_prefix.as_bytes());
-
-            for event_item in event_iter {
-                let (event_key, event_value) =
-                    event_item.map_err(|e| EventStoreError::RocksDbError(e.to_string()))?;
-
-                let event_key_str = String::from_utf8_lossy(&event_key);
-                let event_parts: Vec<&str> = event_key_str.split(':').collect();
-
-                // event:{block}:{tx}:{idx}
-                if event_parts.len() == 4 && event_parts[2] == tx_hex && event_parts[3] == event_idx
-                {
-                    let event: DomainEvent = borsh::from_slice(event_value.as_ref())
-                        .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
-                    result.push(event);
-                    break; // Found the event, move to next index
+                        // Check if this is the event we're looking for
+                        if let Ok(EventStoreKey::Event {
+                            tx_hash: event_tx_hash,
+                            event_index: event_idx,
+                            ..
+                        }) = EventStoreKey::from_bytes(&event_key_bytes)
+                            && event_tx_hash == tx_hash
+                            && event_idx == event_index
+                        {
+                            let event: DomainEvent = borsh::from_slice(event_value.as_ref())
+                                .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
+                            result.push(event);
+                            break; // Found the event, move to next index
+                        }
+                    }
                 }
+                EventStoreKey::TxIndex {
+                    tx_hash: key_tx_hash,
+                    ..
+                } if key_tx_hash != tx_hash => {
+                    // Moved past our tx_hash
+                    break;
+                }
+                _ => break, // Wrong key type, stop iteration
             }
         }
 
@@ -411,23 +420,22 @@ impl EventStore for RocksDbEventStore {
         // Full scan - inefficient but necessary without address indexing
         let mut result = Vec::new();
 
-        let prefix = b"event:";
-        let iter = self.db.prefix_iterator(prefix);
+        let prefix = EventStoreKey::prefix_for_events();
+        let iter = self.db.prefix_iterator(&prefix);
 
         for item in iter {
             let (key, value) = item.map_err(|e| EventStoreError::RocksDbError(e.to_string()))?;
 
-            // Verify the key actually starts with "event:" to avoid other prefixes
-            let key_str = String::from_utf8_lossy(&key);
-            if !key_str.starts_with("event:") {
-                break; // We've moved past the event: prefix
-            }
+            // Verify the key is an Event key
+            if let Ok(EventStoreKey::Event { .. }) = EventStoreKey::from_bytes(&key) {
+                let event: DomainEvent = borsh::from_slice(value.as_ref())
+                    .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
 
-            let event: DomainEvent = borsh::from_slice(value.as_ref())
-                .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
-
-            if event_involves_address(&event.event, address) {
-                result.push(event);
+                if event_involves_address(&event.event, address) {
+                    result.push(event);
+                }
+            } else {
+                break; // We've moved past the event keys
             }
         }
 
@@ -441,7 +449,7 @@ impl EventStore for RocksDbEventStore {
     fn count(&self) -> Result<u64, EventStoreError> {
         match self
             .db
-            .get(b"meta:count")
+            .get(EventStoreKey::MetaCount.to_bytes())
             .map_err(|e| EventStoreError::RocksDbError(e.to_string()))?
         {
             Some(bytes) => {

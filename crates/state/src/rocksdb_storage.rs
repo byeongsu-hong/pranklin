@@ -1,4 +1,4 @@
-use crate::{StateError, StateKey};
+use crate::{StateError, StateKey, StorageKey};
 use alloy_primitives::B256;
 use jmt::storage::{LeafNode, Node, NodeBatch, NodeKey, TreeReader, TreeWriter};
 use jmt::{JellyfishMerkleTree, KeyHash, OwnedValue, Version};
@@ -120,7 +120,7 @@ impl RocksDbStorage {
         let db = Arc::new(db);
 
         // Load current version from disk (for crash recovery)
-        let current_version = match db.get(b"__current_version__") {
+        let current_version = match db.get(StorageKey::CurrentVersion.to_bytes()) {
             Ok(Some(bytes)) if bytes.len() == 8 => u64::from_le_bytes(bytes.try_into().unwrap()),
             _ => 0, // Fresh database
         };
@@ -173,17 +173,17 @@ impl RocksDbStorage {
 
     /// Store latest version for a key (optimization for O(1) lookup)
     fn store_latest_version(&self, key_hash: &KeyHash, version: u64) -> Result<(), StateError> {
-        let key = format!("latest_version_{}", hex::encode(key_hash.0));
+        let key = StorageKey::LatestVersion(*key_hash).to_bytes();
         self.db
-            .put(key.as_bytes(), version.to_le_bytes())
+            .put(key, version.to_le_bytes())
             .map_err(|e| StateError::StorageError(format!("Failed to store latest version: {}", e)))
     }
 
     /// Get latest version for a key (optimization for O(1) lookup)
     fn get_latest_version(&self, key_hash: &KeyHash) -> Result<Option<u64>, StateError> {
-        let key = format!("latest_version_{}", hex::encode(key_hash.0));
+        let key = StorageKey::LatestVersion(*key_hash).to_bytes();
         self.db
-            .get(key.as_bytes())
+            .get(key)
             .map_err(|e| StateError::StorageError(format!("Failed to get latest version: {}", e)))
             .map(|opt| opt.and_then(|bytes| bytes.try_into().ok().map(u64::from_le_bytes)))
     }
@@ -242,12 +242,14 @@ impl RocksDbStorage {
             // Store values separately for fast O(1) access
             // This is more efficient than traversing JMT nodes
             for (key_hash, value_bytes) in &pending {
-                let value_key = format!("jmt_value_{}_{}", hex::encode(key_hash.0), version);
-                self.db
-                    .put(value_key.as_bytes(), value_bytes)
-                    .map_err(|e| {
-                        StateError::StorageError(format!("Failed to store value: {}", e))
-                    })?;
+                let value_key = StorageKey::JmtValue {
+                    key_hash: *key_hash,
+                    version,
+                }
+                .to_bytes();
+                self.db.put(value_key, value_bytes).map_err(|e| {
+                    StateError::StorageError(format!("Failed to store value: {}", e))
+                })?;
             }
 
             // Store latest version for each key (OPTIMIZATION: O(1) lookup)
@@ -261,7 +263,7 @@ impl RocksDbStorage {
 
         *self.current_version.write().unwrap() = version;
         self.db
-            .put(b"__current_version__", version.to_le_bytes())
+            .put(StorageKey::CurrentVersion.to_bytes(), version.to_le_bytes())
             .map_err(|e| StateError::StorageError(format!("Failed to persist version: {}", e)))?;
 
         if self.pruning_config.enabled {
@@ -289,11 +291,11 @@ impl RocksDbStorage {
 
     /// Create a snapshot at the current version
     fn create_snapshot(&self, version: u64) -> Result<(), StateError> {
-        let snapshot_key = format!("snapshot_{}", version);
+        let snapshot_key = StorageKey::Snapshot(version).to_bytes();
         let root = self.get_root(version);
 
         self.db
-            .put(snapshot_key.as_bytes(), root.as_slice())
+            .put(snapshot_key, root.as_slice())
             .map_err(|e| StateError::StorageError(format!("Failed to create snapshot: {}", e)))?;
 
         log::info!("Created snapshot at version {}", version);
@@ -350,19 +352,25 @@ impl RocksDbStorage {
         for item in self.db.iterator(rocksdb::IteratorMode::Start).flatten() {
             let (key, _) = item;
 
-            if key.starts_with(b"snapshot_") || key.len() < 8 {
-                continue;
-            }
+            // Try to deserialize the key and check if it's a versioned key
+            if let Ok(storage_key) = StorageKey::from_bytes(&key) {
+                let should_delete = match storage_key {
+                    // JmtValue keys contain versions
+                    StorageKey::JmtValue { version, .. } => {
+                        version < prune_before && !snapshots_to_keep.contains(&version)
+                    }
+                    // Don't prune snapshots, metadata, or other keys
+                    _ => false,
+                };
 
-            let key_version = self.extract_version_from_key(&key);
+                if should_delete {
+                    keys_to_delete.push(key.to_vec());
+                    pruned_count += 1;
 
-            if key_version < prune_before && !snapshots_to_keep.contains(&key_version) {
-                keys_to_delete.push(key.to_vec());
-                pruned_count += 1;
-
-                if keys_to_delete.len() >= 10000 {
-                    self.batch_delete(&keys_to_delete)?;
-                    keys_to_delete.clear();
+                    if keys_to_delete.len() >= 10000 {
+                        self.batch_delete(&keys_to_delete)?;
+                        keys_to_delete.clear();
+                    }
                 }
             }
         }
@@ -372,12 +380,6 @@ impl RocksDbStorage {
         }
 
         Ok(pruned_count)
-    }
-
-    /// Extract version from key suffix
-    fn extract_version_from_key(&self, key: &[u8]) -> u64 {
-        let version_bytes: [u8; 8] = key[key.len() - 8..].try_into().unwrap();
-        u64::from_le_bytes(version_bytes)
     }
 
     /// Batch delete keys efficiently
@@ -418,15 +420,19 @@ impl RocksDbStorage {
 
     /// Get list of available snapshots
     pub fn list_snapshots(&self) -> Result<Vec<u64>, StateError> {
+        let prefix = StorageKey::prefix_for_snapshots();
         let mut snapshots: Vec<u64> = self
             .db
-            .prefix_iterator(b"snapshot_")
+            .prefix_iterator(&prefix)
             .filter_map(|item| {
                 item.ok().and_then(|(key, _)| {
-                    std::str::from_utf8(&key)
-                        .ok()
-                        .and_then(|s| s.strip_prefix("snapshot_"))
-                        .and_then(|v| v.parse::<u64>().ok())
+                    StorageKey::from_bytes(&key).ok().and_then(|sk| {
+                        if let StorageKey::Snapshot(version) = sk {
+                            Some(version)
+                        } else {
+                            None
+                        }
+                    })
                 })
             })
             .collect();
@@ -437,10 +443,10 @@ impl RocksDbStorage {
 
     /// Restore state from a snapshot
     pub fn restore_from_snapshot(&self, snapshot_version: u64) -> Result<(), StateError> {
-        let snapshot_key = format!("snapshot_{}", snapshot_version);
+        let snapshot_key = StorageKey::Snapshot(snapshot_version).to_bytes();
 
         self.db
-            .get(snapshot_key.as_bytes())
+            .get(&snapshot_key)
             .map_err(|e| StateError::StorageError(format!("Failed to restore snapshot: {}", e)))?
             .ok_or_else(|| {
                 StateError::StorageError(format!(
@@ -451,7 +457,10 @@ impl RocksDbStorage {
 
         *self.current_version.write().unwrap() = snapshot_version;
         self.db
-            .put(b"__current_version__", snapshot_version.to_le_bytes())
+            .put(
+                StorageKey::CurrentVersion.to_bytes(),
+                snapshot_version.to_le_bytes(),
+            )
             .map_err(|e| StateError::StorageError(format!("Failed to persist version: {}", e)))?;
 
         log::info!(
@@ -600,12 +609,10 @@ impl Drop for RocksDbStorage {
 /// JellyfishMerkleTree. The JMT will call these methods to read nodes.
 impl TreeReader for RocksDbStorage {
     fn get_node_option(&self, node_key: &NodeKey) -> anyhow::Result<Option<Node>> {
-        // Serialize the node key using borsh
-        let key_bytes = borsh::to_vec(node_key)?;
-        let db_key = format!("jmt_node_{}", hex::encode(&key_bytes));
+        let db_key = StorageKey::JmtNode(node_key.clone()).to_bytes();
 
         // Read from RocksDB
-        match self.db.get(db_key.as_bytes())? {
+        match self.db.get(db_key)? {
             Some(value_bytes) => {
                 // Deserialize the node using borsh
                 let node: Node = borsh::from_slice(&value_bytes)?;
@@ -618,9 +625,9 @@ impl TreeReader for RocksDbStorage {
     fn get_rightmost_leaf(&self) -> anyhow::Result<Option<(NodeKey, LeafNode)>> {
         // Query for the rightmost leaf (at current version)
         let version = *self.current_version.read().unwrap();
-        let db_key = format!("jmt_rightmost_{}", version);
+        let db_key = StorageKey::RightmostLeaf(version).to_bytes();
 
-        match self.db.get(db_key.as_bytes())? {
+        match self.db.get(db_key)? {
             Some(value_bytes) => {
                 // Deserialize using borsh
                 let (node_key, leaf_node): (NodeKey, LeafNode) = borsh::from_slice(&value_bytes)?;
@@ -646,8 +653,12 @@ impl TreeReader for RocksDbStorage {
         if let Some(latest) = latest_version {
             // Fast path: We know the exact version to lookup
             if latest <= max_version {
-                let key = format!("jmt_value_{}_{}", hex::encode(key_hash.0), latest);
-                return Ok(self.db.get(key.as_bytes())?);
+                let key = StorageKey::JmtValue {
+                    key_hash,
+                    version: latest,
+                }
+                .to_bytes();
+                return Ok(self.db.get(key)?);
             }
             // If latest > max_version, fall through to slow scan
             // This happens during historical queries
@@ -655,10 +666,13 @@ impl TreeReader for RocksDbStorage {
 
         // Fallback: Iterate backwards (only for historical queries or new keys)
         // This is the original O(n) algorithm, kept for correctness
-        let key_prefix = format!("jmt_value_{}", hex::encode(key_hash.0));
         for v in (0..=max_version).rev() {
-            let db_key = format!("{}_{}", key_prefix, v);
-            if let Some(value_bytes) = self.db.get(db_key.as_bytes())? {
+            let db_key = StorageKey::JmtValue {
+                key_hash,
+                version: v,
+            }
+            .to_bytes();
+            if let Some(value_bytes) = self.db.get(db_key)? {
                 return Ok(Some(value_bytes));
             }
         }
@@ -678,10 +692,9 @@ impl TreeWriter for RocksDbStorage {
 
         // Write all nodes
         for (node_key, node) in node_batch.nodes() {
-            let key_bytes = borsh::to_vec(node_key)?;
+            let db_key = StorageKey::JmtNode(node_key.clone()).to_bytes();
             let value_bytes = borsh::to_vec(node)?;
-            let db_key = format!("jmt_node_{}", hex::encode(&key_bytes));
-            batch.put(db_key.as_bytes(), &value_bytes);
+            batch.put(db_key, value_bytes);
         }
 
         // Note: stale node tracking would go here if needed for pruning

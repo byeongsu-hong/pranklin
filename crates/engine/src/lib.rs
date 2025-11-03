@@ -1,6 +1,7 @@
 mod constants;
 mod error;
 mod event_store;
+mod event_store_key;
 mod events;
 mod funding;
 mod liquidation;
@@ -11,6 +12,7 @@ mod services;
 
 pub use error::*;
 pub use event_store::*;
+pub use event_store_key::*;
 pub use events::*;
 pub use funding::*;
 pub use liquidation::*;
