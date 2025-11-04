@@ -301,6 +301,11 @@ impl Engine {
     }
 
     /// Liquidate position with incentives
+    /// This will:
+    /// 1. Cancel all active orders for the trader
+    /// 2. Liquidate the position (partial or full)
+    /// 3. Distribute liquidation fees to liquidator and insurance fund
+    /// 4. Use insurance fund for bad debt if needed
     pub fn liquidate_with_incentive(
         &mut self,
         trader: Address,
@@ -310,6 +315,7 @@ impl Engine {
     ) -> Result<Option<LiquidationResult>, EngineError> {
         self.liquidation.liquidate_with_incentive(
             &mut self.state,
+            &mut self.orderbook,
             trader,
             market_id,
             mark_price,
@@ -350,6 +356,7 @@ impl Engine {
     }
 
     /// Process liquidation batch
+    /// Efficiently liquidates multiple positions in a single call
     pub fn process_liquidation_batch(
         &mut self,
         market_id: u32,
@@ -359,6 +366,7 @@ impl Engine {
     ) -> Result<Vec<LiquidationResult>, EngineError> {
         self.liquidation.process_liquidation_batch(
             &mut self.state,
+            &mut self.orderbook,
             market_id,
             mark_price,
             liquidator,

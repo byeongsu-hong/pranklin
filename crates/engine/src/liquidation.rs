@@ -1,12 +1,12 @@
 use crate::{
-    EngineError, PositionManager,
+    EngineError, OrderbookManager, PositionManager,
     constants::{
         BASIS_POINTS, DEFAULT_INSURANCE_FEE_BPS, DEFAULT_LIQUIDATOR_FEE_BPS,
         DEFAULT_MIN_INSURANCE_RATIO_BPS, MARGIN_BUFFER_BPS, MIN_LIQUIDATION_PCT,
     },
 };
 use alloy_primitives::Address;
-use pranklin_state::{Market, Position, StateManager};
+use pranklin_state::{Market, OrderStatus, Position, StateManager};
 use std::collections::{BinaryHeap, HashMap};
 
 /// Position risk information for liquidation priority
@@ -231,10 +231,55 @@ impl LiquidationEngine {
         }
     }
 
+    /// Cancel all active orders for a trader in a specific market
+    /// This is called before liquidation to free up margin and prevent new positions
+    fn cancel_trader_orders(
+        &self,
+        state: &mut StateManager,
+        orderbook: &mut OrderbookManager,
+        trader: Address,
+        market_id: u32,
+    ) -> Result<Vec<u64>, EngineError> {
+        let mut cancelled_orders = Vec::new();
+
+        // Get all active orders for this market
+        let active_order_ids = state.get_active_orders_by_market(market_id)?;
+
+        // Filter and cancel orders belonging to the trader
+        for order_id in active_order_ids {
+            if let Some(mut order) = state.get_order(order_id)?
+                && order.owner == trader
+                && order.status == OrderStatus::Active
+            {
+                // Remove from orderbook
+                orderbook.remove_order(order_id, &order);
+
+                // Update order status
+                order.status = OrderStatus::Cancelled;
+                state.set_order(order_id, order)?;
+
+                // Remove from active orders
+                state.remove_active_order(market_id, order_id)?;
+
+                cancelled_orders.push(order_id);
+            }
+        }
+
+        Ok(cancelled_orders)
+    }
+
     /// Check and liquidate positions with liquidator incentives
+    ///
+    /// Liquidation process:
+    /// 1. Verify position needs liquidation
+    /// 2. Cancel all active orders for the trader in this market
+    /// 3. Calculate liquidation size (partial or full)
+    /// 4. Execute liquidation and distribute fees
+    /// 5. Use insurance fund if needed for bad debt
     pub fn liquidate_with_incentive(
         &mut self,
         state: &mut StateManager,
+        orderbook: &mut OrderbookManager,
         trader: Address,
         market_id: u32,
         mark_price: u64,
@@ -257,6 +302,10 @@ impl LiquidationEngine {
         if !self.should_liquidate(state, trader, market_id, liquidation_price, &market)? {
             return Ok(None);
         }
+
+        // Step 1: Cancel all active orders for the trader in this market
+        // This frees up margin and prevents new positions from being opened
+        let _cancelled_orders = self.cancel_trader_orders(state, orderbook, trader, market_id)?;
 
         let position = state
             .get_position(trader, market_id)?
@@ -703,9 +752,11 @@ impl LiquidationEngine {
     }
 
     /// Batch liquidation processing
+    /// Processes multiple liquidations in a single call for efficiency
     pub fn process_liquidation_batch(
         &mut self,
         state: &mut StateManager,
+        orderbook: &mut OrderbookManager,
         market_id: u32,
         mark_price: u64,
         liquidator: Address,
@@ -719,8 +770,8 @@ impl LiquidationEngine {
         let mut results = Vec::new();
 
         for (trader, mid) in at_risk.into_iter().take(max_liquidations) {
-            if let Some(result) =
-                self.liquidate_with_incentive(state, trader, mid, mark_price, liquidator)?
+            if let Some(result) = self
+                .liquidate_with_incentive(state, orderbook, trader, mid, mark_price, liquidator)?
             {
                 results.push(result);
             }

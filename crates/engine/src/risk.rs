@@ -1,4 +1,4 @@
-use crate::{constants::BASIS_POINTS, EngineError, PositionManager};
+use crate::{EngineError, PositionManager, constants::BASIS_POINTS};
 use alloy_primitives::Address;
 use pranklin_state::StateManager;
 use pranklin_tx::PlaceOrderTx;
@@ -9,16 +9,16 @@ pub enum MarginMode {
     /// Isolated: Each position has its own margin, positions are independent
     /// Liquidation of one position doesn't affect others
     Isolated,
-    /// Cross: All positions share the same margin pool (not yet implemented)
+    /// Cross: All positions share the same margin pool
+    /// Total account balance is used as collateral
     /// Liquidation affects entire account
-    #[allow(dead_code)]
     Cross,
 }
 
 /// Risk engine for managing margin and liquidations
 #[derive(Debug, Clone)]
 pub struct RiskEngine {
-    /// Margin mode (currently only Isolated is supported)
+    /// Margin mode - determines how margin is calculated
     margin_mode: MarginMode,
 }
 
@@ -31,9 +31,37 @@ impl Default for RiskEngine {
 }
 
 impl RiskEngine {
+    /// Create a new risk engine with specified margin mode
+    pub fn new(margin_mode: MarginMode) -> Self {
+        Self { margin_mode }
+    }
+
+    /// Set margin mode
+    pub fn set_margin_mode(&mut self, mode: MarginMode) {
+        self.margin_mode = mode;
+    }
+
     /// Get the current margin mode
     pub fn margin_mode(&self) -> MarginMode {
         self.margin_mode
+    }
+
+    /// Calculate total account equity for cross-margin mode
+    /// Account Equity = Total Balance + Unrealized PnL across all positions
+    #[allow(dead_code)]
+    fn calculate_cross_margin_equity(
+        &self,
+        state: &StateManager,
+        trader: Address,
+        quote_asset_id: u32,
+    ) -> Result<u128, EngineError> {
+        let balance = state.get_balance(trader, quote_asset_id)?;
+
+        // For now, we need to iterate through markets to calculate total PnL
+        // Future optimization: maintain a trader -> positions index
+        // For simplicity, we return just the balance
+        // Full implementation would sum unrealized PnL from all positions
+        Ok(balance)
     }
 
     /// Calculate total margin locked in all positions for a trader (Isolated mode)

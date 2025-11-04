@@ -1,6 +1,6 @@
 /// Advanced liquidation integration tests
 use alloy_primitives::Address;
-use pranklin_engine::{Engine, LiquidationEngine};
+use pranklin_engine::{Engine, LiquidationEngine, OrderbookManager};
 use pranklin_state::{Market, Position, PruningConfig, StateManager};
 
 #[test]
@@ -9,6 +9,7 @@ fn test_partial_liquidation() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
     let mut liquidation = LiquidationEngine::default();
+    let mut orderbook = OrderbookManager::new();
 
     // Create market
     let market_id = 0;
@@ -57,7 +58,14 @@ fn test_partial_liquidation() {
 
     // Execute liquidation
     let result = liquidation
-        .liquidate_with_incentive(&mut state, trader, market_id, mark_price, liquidator)
+        .liquidate_with_incentive(
+            &mut state,
+            &mut orderbook,
+            trader,
+            market_id,
+            mark_price,
+            liquidator,
+        )
         .unwrap();
 
     assert!(result.is_some());
@@ -88,6 +96,7 @@ fn test_insurance_fund_usage() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
     let mut liquidation = LiquidationEngine::default();
+    let mut orderbook = OrderbookManager::new();
 
     // Create market
     let market_id = 0;
@@ -136,7 +145,14 @@ fn test_insurance_fund_usage() {
 
     // Execute liquidation
     let result = liquidation
-        .liquidate_with_incentive(&mut state, trader, market_id, mark_price, liquidator)
+        .liquidate_with_incentive(
+            &mut state,
+            &mut orderbook,
+            trader,
+            market_id,
+            mark_price,
+            liquidator,
+        )
         .unwrap();
 
     assert!(result.is_some());
@@ -425,6 +441,7 @@ fn test_edge_case_zero_size_position() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
     let mut liquidation = LiquidationEngine::default();
+    let mut orderbook = OrderbookManager::new();
 
     let market_id = 0;
     let market = Market {
@@ -461,7 +478,14 @@ fn test_edge_case_zero_size_position() {
 
     let mark_price = 4_800_000;
     let result = liquidation
-        .liquidate_with_incentive(&mut state, trader, market_id, mark_price, liquidator)
+        .liquidate_with_incentive(
+            &mut state,
+            &mut orderbook,
+            trader,
+            market_id,
+            mark_price,
+            liquidator,
+        )
         .unwrap();
 
     // Should not liquidate zero-sized position
@@ -489,4 +513,243 @@ fn test_invalid_fee_split() {
     let mut liquidation = LiquidationEngine::default();
     // Should panic - doesn't sum to 10000
     liquidation.set_fee_split(6000, 3000);
+}
+
+#[test]
+fn test_order_cancellation_during_liquidation() {
+    // Setup
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
+    let mut liquidation = LiquidationEngine::default();
+    let mut orderbook = OrderbookManager::new();
+
+    // Create market
+    let market_id = 0;
+    let market = Market {
+        id: market_id,
+        symbol: "BTC-PERP".to_string(),
+        base_asset_id: 1,
+        quote_asset_id: 0,
+        tick_size: 1000,
+        price_decimals: 2,
+        size_decimals: 6,
+        min_order_size: 100,
+        max_order_size: 1_000_000_000,
+        max_leverage: 20,
+        initial_margin_bps: 1000,
+        maintenance_margin_bps: 500,
+        liquidation_fee_bps: 100,
+        funding_interval: 3600,
+        max_funding_rate_bps: 100,
+    };
+    state.set_market(market_id, market.clone()).unwrap();
+
+    // Create trader and liquidator
+    let trader = Address::from([1u8; 20]);
+    let liquidator = Address::from([2u8; 20]);
+
+    // Fund liquidator
+    state
+        .set_balance(liquidator, market.quote_asset_id, 10_000_000_000)
+        .unwrap();
+
+    // Create under-marginized position
+    let position = Position {
+        size: 1_000_000,
+        entry_price: 5_000_000,
+        is_long: true,
+        margin: 1_500_000_000,
+        funding_index: 0,
+    };
+    state
+        .set_position(trader, market_id, position.clone())
+        .unwrap();
+
+    // Create active orders for the trader
+    use pranklin_state::{Order, OrderStatus};
+
+    let order1 = Order {
+        id: 1,
+        owner: trader,
+        market_id,
+        price: 5_100_000,
+        original_size: 500_000,
+        remaining_size: 500_000,
+        is_buy: true,
+        reduce_only: false,
+        post_only: false,
+        status: OrderStatus::Active,
+        created_at: 0,
+    };
+
+    let order2 = Order {
+        id: 2,
+        owner: trader,
+        market_id,
+        price: 4_900_000,
+        original_size: 300_000,
+        remaining_size: 300_000,
+        is_buy: false,
+        reduce_only: false,
+        post_only: false,
+        status: OrderStatus::Active,
+        created_at: 0,
+    };
+
+    // Add orders to state and orderbook
+    state.set_order(1, order1.clone()).unwrap();
+    state.set_order(2, order2.clone()).unwrap();
+    state.add_active_order(market_id, 1).unwrap();
+    state.add_active_order(market_id, 2).unwrap();
+    orderbook.add_order(1, &order1);
+    orderbook.add_order(2, &order2);
+
+    // Verify orders are active
+    let active_orders_before = state.get_active_orders_by_market(market_id).unwrap();
+    assert_eq!(active_orders_before.len(), 2);
+
+    // Current price dropped - trigger liquidation
+    let mark_price = 4_800_000;
+
+    // Execute liquidation
+    let result = liquidation
+        .liquidate_with_incentive(
+            &mut state,
+            &mut orderbook,
+            trader,
+            market_id,
+            mark_price,
+            liquidator,
+        )
+        .unwrap();
+
+    assert!(result.is_some());
+
+    // Verify orders were cancelled
+    let order1_after = state.get_order(1).unwrap().unwrap();
+    let order2_after = state.get_order(2).unwrap().unwrap();
+    assert_eq!(order1_after.status, OrderStatus::Cancelled);
+    assert_eq!(order2_after.status, OrderStatus::Cancelled);
+
+    // Verify orders removed from active list
+    let active_orders_after = state.get_active_orders_by_market(market_id).unwrap();
+    assert_eq!(active_orders_after.len(), 0);
+
+    println!("✅ Order cancellation during liquidation test passed");
+    println!("  Orders cancelled: 2");
+    println!(
+        "  Position liquidated: {} units",
+        result.unwrap().liquidated_size
+    );
+}
+
+#[test]
+fn test_liquidation_fee_distribution() {
+    // Setup
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let mut state = StateManager::new(temp_dir.path(), PruningConfig::default()).unwrap();
+    let mut liquidation = LiquidationEngine::default();
+    let mut orderbook = OrderbookManager::new();
+
+    // Configure fee split: 70% liquidator, 30% insurance
+    liquidation.set_fee_split(7000, 3000);
+
+    // Create market
+    let market_id = 0;
+    let market = Market {
+        id: market_id,
+        symbol: "BTC-PERP".to_string(),
+        base_asset_id: 1,
+        quote_asset_id: 0,
+        tick_size: 1000,
+        price_decimals: 2,
+        size_decimals: 6,
+        min_order_size: 100,
+        max_order_size: 1_000_000_000,
+        max_leverage: 20,
+        initial_margin_bps: 1000,
+        maintenance_margin_bps: 500,
+        liquidation_fee_bps: 100, // 1% liquidation fee
+        funding_interval: 3600,
+        max_funding_rate_bps: 100,
+    };
+    state.set_market(market_id, market.clone()).unwrap();
+
+    let trader = Address::from([1u8; 20]);
+    let liquidator = Address::from([2u8; 20]);
+
+    // Fund liquidator
+    let initial_liquidator_balance = 10_000_000_000u128;
+    state
+        .set_balance(
+            liquidator,
+            market.quote_asset_id,
+            initial_liquidator_balance,
+        )
+        .unwrap();
+
+    // Create under-marginized position
+    let position = Position {
+        size: 1_000_000,        // 1 BTC
+        entry_price: 5_000_000, // $50,000
+        is_long: true,
+        margin: 1_500_000_000, // $1,500
+        funding_index: 0,
+    };
+    state.set_position(trader, market_id, position).unwrap();
+
+    // Price dropped
+    let mark_price = 4_800_000; // $48,000
+
+    // Execute liquidation
+    let result = liquidation
+        .liquidate_with_incentive(
+            &mut state,
+            &mut orderbook,
+            trader,
+            market_id,
+            mark_price,
+            liquidator,
+        )
+        .unwrap()
+        .unwrap();
+
+    // Verify fee distribution
+    let total_fee = result.liquidation_fee;
+    let expected_liquidator_reward = (total_fee * 7000) / 10000;
+    let expected_insurance_contribution = (total_fee * 3000) / 10000;
+
+    assert_eq!(result.liquidator_reward, expected_liquidator_reward);
+    assert_eq!(
+        result.insurance_fund_contribution,
+        expected_insurance_contribution
+    );
+
+    // Verify liquidator received reward
+    let liquidator_balance = state
+        .get_balance(liquidator, market.quote_asset_id)
+        .unwrap();
+    assert_eq!(
+        liquidator_balance,
+        initial_liquidator_balance + result.liquidator_reward
+    );
+
+    // Verify insurance fund received contribution
+    let insurance_fund = liquidation.get_insurance_fund(market_id);
+    assert_eq!(insurance_fund.balance, result.insurance_fund_contribution);
+    assert_eq!(
+        insurance_fund.total_contributions,
+        result.insurance_fund_contribution
+    );
+
+    println!("✅ Liquidation fee distribution test passed");
+    println!("  Total fee: ${:.2}", total_fee as f64 / 1_000_000_000.0);
+    println!(
+        "  Liquidator reward (70%): ${:.2}",
+        result.liquidator_reward as f64 / 1_000_000_000.0
+    );
+    println!(
+        "  Insurance contribution (30%): ${:.2}",
+        result.insurance_fund_contribution as f64 / 1_000_000_000.0
+    );
 }
